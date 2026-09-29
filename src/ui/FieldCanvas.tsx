@@ -7,7 +7,7 @@ import { pathLength, samplePath } from "../core/path";
 import type { PathSpec } from "../core/routine";
 import { defaultMotion } from "../core/routine";
 import { obstaclePoly } from "../core/world";
-import { chassisRects, scoreSpecOf } from "../core/robot";
+import { chassisRects, pickupOrientation, scoreSpecOf } from "../core/robot";
 import { drawCup, drawGoal, drawLoader, drawLyingCup, drawLyingPin, drawPerimeter, drawStandingPin, drawToggle, PALETTE, type Frame2D } from "./fieldArt";
 import { loaderOutline } from "../games/override";
 import { bearingDeg, frameIndex, lerpFrame, TEAM_COLOR } from "./helpers";
@@ -239,7 +239,7 @@ export function FieldCanvas() {
         ctx.fillStyle = "rgba(80,150,255,0.5)"; ctx.strokeStyle = "#8ec1ff"; ctx.lineWidth = 2;
         for (const c of chassisRects(robot)) { ctx.fillRect((c.cx - c.w / 2) * S, -(c.cy + c.h / 2) * S, c.w * S, c.h * S); ctx.strokeRect((c.cx - c.w / 2) * S, -(c.cy + c.h / 2) * S, c.w * S, c.h * S); }
         if (overlays.zones && robot.intake) { ctx.fillStyle = "rgba(120,220,140,0.25)"; ctx.fillRect(((robot.intake.x ?? 0) - robot.intake.width / 2) * S, -l / 2 + (robot.intake.inset ?? 0) * S - robot.intake.reach * S, robot.intake.width * S, robot.intake.reach * S); }
-        if (overlays.zones && robot.rearIntake) { ctx.fillStyle = robot.rearIntake.standingOnly ? "rgba(90,200,230,0.25)" : "rgba(120,220,140,0.25)"; ctx.fillRect(((robot.rearIntake.x ?? 0) - robot.rearIntake.width / 2) * S, l / 2 - (robot.rearIntake.inset ?? 0) * S, robot.rearIntake.width * S, robot.rearIntake.reach * S); }
+        if (overlays.zones && robot.rearIntake) { ctx.fillStyle = pickupOrientation(robot.rearIntake) === "standing" ? "rgba(90,200,230,0.25)" : pickupOrientation(robot.rearIntake) === "lying" ? "rgba(230,150,90,0.25)" : "rgba(120,220,140,0.25)"; ctx.fillRect(((robot.rearIntake.x ?? 0) - robot.rearIntake.width / 2) * S, l / 2 - (robot.rearIntake.inset ?? 0) * S, robot.rearIntake.width * S, robot.rearIntake.reach * S); }
         if (overlays.zones) { const sc = scoreSpecOf(robot); const yy = (sc.side === "front" ? -1 : 1) * (l / 2 - (sc.inset ?? 0) * S); ctx.fillStyle = "#ffd24a"; ctx.beginPath(); ctx.arc((sc.x ?? 0) * S, yy, 3, 0, Math.PI * 2); ctx.fill(); }
         for (const wh of robot.wheels) for (const side of [-1, 1]) {
           ctx.fillStyle = wh.type === "omni" ? "#eee" : "#222";

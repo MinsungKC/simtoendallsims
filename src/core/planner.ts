@@ -1,7 +1,7 @@
 import { avoidObstacles } from "./autoroute";
 import { fitStroke } from "./fit";
 import { pathLength } from "./path";
-import { scoreSpecOf, type RobotConfig } from "./robot";
+import { scoreSpecOf, zoneTakes, type RobotConfig } from "./robot";
 import { defaultMotion, uid, type ActionSpec, type MotionSpec, type Routine, type Step } from "./routine";
 import { simulate, type Recording } from "./runtime";
 import { optimizeTimeouts } from "./tune";
@@ -49,8 +49,8 @@ function sidesFor(task: PlanTask, cfg: RobotConfig): ("front" | "back")[] {
   if (task.action === "place") return [scoreSpecOf(cfg).side];
   if (task.action === "toggle") return ["front"];
   const out: ("front" | "back")[] = [];
-  if (cfg.intake && !(cfg.intake.standingOnly && task.lying)) out.push("front");
-  if (cfg.rearIntake && !(cfg.rearIntake.standingOnly && task.lying)) out.push("back");
+  if (cfg.intake && zoneTakes(cfg.intake, !!task.lying)) out.push("front");
+  if (cfg.rearIntake && zoneTakes(cfg.rearIntake, !!task.lying)) out.push("back");
   return out.length ? out : ["front"];
 }
 

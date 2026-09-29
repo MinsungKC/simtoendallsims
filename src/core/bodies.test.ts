@@ -109,3 +109,12 @@ describe("scoring mechanism inside the chassis", () => {
     expect(make({ side: "front", inset: 2, reach: 0.5 })).toBeNull(); // the point sits in the slot, right at the Goal
   });
 });
+
+describe("lying-only pickup", () => {
+  it("takes a pin lying on its side but not one standing", () => {
+    const c = { ...cfg, intake: { reach: 4, width: 12, capacity: 4, orientation: "lying" as const }, rearIntake: null };
+    const run = (o: Partial<GameObject>) => { const w = createWorld({ ...base, objects: [pin({ y: 11, ...o })] }, { x: 0, y: 0, heading: 0 }); w.mech.intake = 1; for (let i = 0; i < 20; i++) stepWorld(w, c, 0, 0, 0.005); return w.objects[0].state; };
+    expect(run({ lying: true, half: 2.2, angle: 90 })).toBe("held");
+    expect(run({})).toBe("field");
+  });
+});

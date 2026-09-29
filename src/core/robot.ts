@@ -161,6 +161,16 @@ export interface ScoreSpec {
   reach?: number;
 }
 
+export function pickupOrientation(spec: Pick<IntakeSpec, "orientation" | "standingOnly">): "any" | "standing" | "lying" {
+  return spec.orientation ?? (spec.standingOnly ? "standing" : "any");
+}
+
+/** Can this zone take a piece that is (not) lying on its side? */
+export function zoneTakes(spec: Pick<IntakeSpec, "orientation" | "standingOnly">, lying: boolean): boolean {
+  const o = pickupOrientation(spec);
+  return o === "any" || (o === "lying" ? lying : !lying);
+}
+
 export function scoreSpecOf(cfg: Pick<RobotConfig, "scoring" | "scoreSide">): ScoreSpec {
   return cfg.scoring ?? { side: cfg.scoreSide ?? "front" };
 }
@@ -176,8 +186,10 @@ export interface IntakeSpec {
   width: number;
   /** Max objects held */
   capacity: number;
-  /** Only picks up objects that are standing upright (not lying on their side). Default false = any orientation. */
+  /** Only picks up objects that are standing upright (not lying on their side). Legacy: prefer `orientation`. */
   standingOnly?: boolean;
+  /** Which pieces this zone takes: any, only standing upright, or only lying on their side. */
+  orientation?: "any" | "standing" | "lying";
 }
 
 export const IN = 0.0254;

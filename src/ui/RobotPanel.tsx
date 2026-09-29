@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motorBudget } from "../core/motors";
-import { WHEEL_CATALOG, chassisRects, derive, scoreSpecOf, type RobotConfig, type WheelType } from "../core/robot";
+import { WHEEL_CATALOG, chassisRects, derive, pickupOrientation, scoreSpecOf, type RobotConfig, type WheelType } from "../core/robot";
 import { autoTune, suggestHorizontalDrift } from "../core/tune";
 import { Badge, Check, Num, Sel, Section } from "./atoms";
 import { PRESETS } from "./presets";
@@ -126,7 +126,7 @@ export function RobotPanel() {
             <Num label="Reach" value={robot.intake.reach} onChange={(v) => setRobot({ intake: { ...robot.intake!, reach: v } })} unit="in" min={1} />
             <Num label="Width" value={robot.intake.width} onChange={(v) => setRobot({ intake: { ...robot.intake!, width: v } })} unit="in" min={1} />
             <Num label="Holds up to" value={robot.intake.capacity} onChange={(v) => setRobot({ intake: { ...robot.intake!, capacity: Math.round(v) } })} min={1} />
-            <Sel label="Picks up" value={robot.intake.standingOnly ? "standing" : "any"} options={[{ value: "any", label: "Any orientation (standing or lying)" }, { value: "standing", label: "Standing pieces only" }]} onChange={(v) => setRobot({ intake: { ...robot.intake!, standingOnly: v === "standing" } })} />
+            <Sel label="Picks up" value={pickupOrientation(robot.intake)} options={[{ value: "any", label: "Any orientation" }, { value: "standing", label: "Standing pieces only" }, { value: "lying", label: "Lying pieces only" }]} onChange={(v) => setRobot({ intake: { ...robot.intake!, standingOnly: undefined, orientation: v } })} />
           </>
         )}
         <Check label="Back pickup" value={!!robot.rearIntake} onChange={(v) => setRobot({ rearIntake: v ? { reach: 4, width: 10, capacity: 6, standingOnly: true } : null })} />
@@ -135,7 +135,7 @@ export function RobotPanel() {
             <Num label="Reach" value={robot.rearIntake.reach} onChange={(v) => setRobot({ rearIntake: { ...robot.rearIntake!, reach: v } })} unit="in" min={1} />
             <Num label="Width" value={robot.rearIntake.width} onChange={(v) => setRobot({ rearIntake: { ...robot.rearIntake!, width: v } })} unit="in" min={1} />
             <Num label="Holds up to" value={robot.rearIntake.capacity} onChange={(v) => setRobot({ rearIntake: { ...robot.rearIntake!, capacity: Math.round(v) } })} min={1} />
-            <Sel label="Picks up" value={robot.rearIntake.standingOnly ? "standing" : "any"} options={[{ value: "standing", label: "Standing pieces only" }, { value: "any", label: "Any orientation (standing or lying)" }]} onChange={(v) => setRobot({ rearIntake: { ...robot.rearIntake!, standingOnly: v === "standing" } })} />
+            <Sel label="Picks up" value={pickupOrientation(robot.rearIntake)} options={[{ value: "any", label: "Any orientation" }, { value: "standing", label: "Standing pieces only" }, { value: "lying", label: "Lying pieces only" }]} onChange={(v) => setRobot({ rearIntake: { ...robot.rearIntake!, standingOnly: undefined, orientation: v } })} />
           </>
         )}
         <p className="note">Each pickup zone can sit <b>inside</b> the frame (for a mechanism in a cutout): "Inset" is how far past the edge it starts. Sideways offset: + = right.</p>

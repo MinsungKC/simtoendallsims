@@ -1,4 +1,4 @@
-import { chassisRects, derive, IN, scoreSpecOf, type DerivedRobot, type RobotConfig } from "./robot";
+import { chassisRects, derive, IN, scoreSpecOf, zoneTakes, type DerivedRobot, type RobotConfig } from "./robot";
 import { defaultEnv, initialState, step as stepRobot, type Environment, type SimState } from "./physics";
 import { closestOnObb, closestOnPoly, corners, forwardOf, polyContact, rectVerts, RAD, rightOf, type Obb, type Vec } from "./geometry";
 
@@ -548,7 +548,7 @@ function updateMechanisms(w: World, cfg: RobotConfig): void {
     };
     for (const o of w.objects) {
       if (o.state !== "field" || o.carriable || o.fixed) continue;
-      if (zn.spec.standingOnly && o.lying) continue; // e.g. a rear roller can't swallow a pin lying on its side
+      if (!zoneTakes(zn.spec, !!o.lying)) continue; // e.g. a rear roller that only takes standing pieces ignores a pin lying on its side
       if (!canHold(w, cfg, o.kind)) continue;
       const inner = w.objects.find((q) => q.state === "nested" && q.nestedIn === o.id);
       if (inner && (!canHold(w, cfg, inner.kind) || w.held.length + 2 > maxHold(cfg))) continue; // a Cup with a Pin in it needs room for both
