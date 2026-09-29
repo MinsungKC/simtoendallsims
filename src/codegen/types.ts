@@ -1,6 +1,7 @@
 import type { RobotConfig } from "../core/robot";
 import type { Routine } from "../core/routine";
 import type { Recording } from "../core/runtime";
+import type { CodeFrame } from "../core/frame";
 
 export type TargetId = "lemlib" | "ez-template" | "jar-template" | "generic-pros";
 
@@ -67,4 +68,6 @@ export interface GenInput {
   recording?: Recording;
   /** Gains derived for the target library (or the sim's LemLib gains) */
   fnName?: string;
+  /** Coordinate frame of the emitted code (default "start": robot starts at 0,0 keeping its heading) */
+  frame?: CodeFrame;
 }

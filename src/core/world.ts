@@ -3,7 +3,7 @@ import { defaultEnv, initialState, step as stepRobot, type Environment, type Sim
 import { closestOnObb, closestOnPoly, corners, forwardOf, polyContact, rectVerts, RAD, rightOf, type Obb, type Vec } from "./geometry";
 
 export type Team = "red" | "blue" | "neutral";
-export type ObjectState = "field" | "held" | "carried" | "stacked";
+export type ObjectState = "field" | "held" | "carried" | "stacked" | "nested";
 
 export interface GameObject {
   id: number;
@@ -32,6 +32,15 @@ export interface GameObject {
   opaqueUp?: boolean;
   /** Starts the match held by the robot (a Preload) */
   held?: boolean;
+  /** Starts the match already Placed in this goal (bottom to top, in object order) */
+  stackedIn?: string;
+  /** A Pin standing nested inside this Cup (by id): rides with the Cup and is picked up with it */
+  nestedIn?: number;
+  /** Drawn orientation, degrees (0 = +y, clockwise): for a lying Pin, the direction its halves[0] end points */
+  angle?: number;
+  /** Lying on its side: collides as a capsule (a spine of half-length `half` swept by radius `r`) and is drawn lengthwise */
+  lying?: boolean;
+  half?: number;
 }
 
 export interface Obstacle {
@@ -135,13 +144,22 @@ export interface WorldInit {
 }
 
 export function createWorld(init: WorldInit, start: { x: number; y: number; heading: number }): World {
-  const objects = init.objects.map((o) => ({ ...o, vx: 0, vy: 0, state: o.held ? ("held" as const) : ("field" as const) }));
+  const objects = init.objects.map((o) => ({
+    ...o, vx: 0, vy: 0,
+    state: o.held ? ("held" as const) : o.stackedIn ? ("stacked" as const) : o.nestedIn !== undefined ? ("nested" as const) : ("field" as const),
+  }));
+  const goals = (init.goals ?? []).map((g) => ({ ...g, stack: [] as StackItem[] }));
+  for (const o of objects) {
+    if (!o.stackedIn) continue;
+    const g = goals.find((q) => q.id === o.stackedIn);
+    if (g) { g.stack.push({ id: o.id, kind: o.kind, halves: o.halves, opaqueUp: o.opaqueUp, flip: o.flip }); o.x = g.x; o.y = g.y; }
+  }
   return {
     t: 0,
     robot: initialState(start.x, start.y, start.heading),
     objects,
     obstacles: init.obstacles.map((o) => ({ ...o })),
-    goals: (init.goals ?? []).map((g) => ({ ...g, stack: [] })),
+    goals,
     toggles: (init.toggles ?? []).map((t) => ({ ...t })),
     events: [],
     rules: init.rules,
@@ -152,6 +170,22 @@ export function createWorld(init: WorldInit, start: { x: number; y: number; head
     env: { ...defaultEnv, fieldSize: init.fieldSize },
     contacts: 0,
   };
+}
+
+/** Point on a lying object's spine nearest to (x, y); a standing object's spine is its center. */
+export function spinePoint(o: Pick<GameObject, "x" | "y" | "lying" | "half" | "angle">, x: number, y: number): Vec {
+  if (!o.lying || !o.half) return { x: o.x, y: o.y };
+  const a = (o.angle ?? 0) * RAD;
+  const dx = Math.sin(a), dy = Math.cos(a);
+  const t = Math.max(-o.half, Math.min(o.half, (x - o.x) * dx + (y - o.y) * dy));
+  return { x: o.x + dx * t, y: o.y + dy * t };
+}
+
+/** Half extents of an object along x / y (for wall contact). */
+function extents(o: GameObject): { ex: number; ey: number } {
+  if (!o.lying || !o.half) return { ex: o.r, ey: o.r };
+  const a = (o.angle ?? 0) * RAD;
+  return { ex: Math.abs(Math.sin(a)) * o.half + o.r, ey: Math.abs(Math.cos(a)) * o.half + o.r };
 }
 
 export function robotObb(s: SimState, cfg: RobotConfig): Obb {
@@ -251,62 +285,72 @@ function resolveObjects(w: World, cfg: RobotConfig, d: DerivedRobot, dt: number)
     o.x += o.vx * dt;
     o.y += o.vy * dt;
     // walls
-    if (o.x + o.r > half) { o.x = half - o.r; o.vx = -Math.abs(o.vx) * 0.3; }
-    if (o.x - o.r < -half) { o.x = -half + o.r; o.vx = Math.abs(o.vx) * 0.3; }
-    if (o.y + o.r > half) { o.y = half - o.r; o.vy = -Math.abs(o.vy) * 0.3; }
-    if (o.y - o.r < -half) { o.y = -half + o.r; o.vy = Math.abs(o.vy) * 0.3; }
-    // static obstacles (any convex polygon)
+    const { ex, ey } = extents(o);
+    if (o.x + ex > half) { o.x = half - ex; o.vx = -Math.abs(o.vx) * 0.3; }
+    if (o.x - ex < -half) { o.x = -half + ex; o.vx = Math.abs(o.vx) * 0.3; }
+    if (o.y + ey > half) { o.y = half - ey; o.vy = -Math.abs(o.vy) * 0.3; }
+    if (o.y - ey < -half) { o.y = -half + ey; o.vy = Math.abs(o.vy) * 0.3; }
+    // static obstacles (any convex polygon). A lying object is tested at the spine point nearest the obstacle.
     for (const ob of w.obstacles) {
       const poly = obstaclePoly(ob);
-      const cp = closestOnPoly(poly, o.x, o.y);
-      let dx = o.x - cp.x, dy = o.y - cp.y;
+      let ref = spinePoint(o, o.x, o.y);
+      if (o.lying) { const c0 = closestOnPoly(poly, ref.x, ref.y); ref = spinePoint(o, c0.x, c0.y); }
+      const cp = closestOnPoly(poly, ref.x, ref.y);
+      let dx = ref.x - cp.x, dy = ref.y - cp.y;
       const dist = Math.hypot(dx, dy);
       if (cp.inside || dist < o.r) {
+        let px = ref.x, py = ref.y;
         if (cp.inside || dist < 1e-6) {
           // centre is inside: push out through the nearest edge
-          let bestD = Infinity, bn = { x: 1, y: 0 }, bp = { x: o.x, y: o.y };
+          let bestD = Infinity, bn = { x: 1, y: 0 }, bp = { x: ref.x, y: ref.y };
+          const ctr = poly.reduce((acc, q) => ({ x: acc.x + q.x / poly.length, y: acc.y + q.y / poly.length }), { x: 0, y: 0 });
           for (let k = 0; k < poly.length; k++) {
             const a = poly[k], b = poly[(k + 1) % poly.length];
             const ex = b.x - a.x, ey = b.y - a.y;
             const len = Math.hypot(ex, ey) || 1;
             let nx = ey / len, ny = -ex / len;
             const c = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-            const ctr = poly.reduce((acc, q) => ({ x: acc.x + q.x / poly.length, y: acc.y + q.y / poly.length }), { x: 0, y: 0 });
             if ((c.x - ctr.x) * nx + (c.y - ctr.y) * ny < 0) { nx = -nx; ny = -ny; }
-            const d = Math.abs((o.x - a.x) * nx + (o.y - a.y) * ny);
-            if (d < bestD) { bestD = d; bn = { x: nx, y: ny }; bp = { x: o.x + nx * d, y: o.y + ny * d }; }
+            const d = Math.abs((ref.x - a.x) * nx + (ref.y - a.y) * ny);
+            if (d < bestD) { bestD = d; bn = { x: nx, y: ny }; bp = { x: ref.x + nx * d, y: ref.y + ny * d }; }
           }
           dx = bn.x; dy = bn.y;
-          o.x = bp.x + dx * o.r; o.y = bp.y + dy * o.r;
+          px = bp.x + dx * o.r; py = bp.y + dy * o.r;
         } else {
           dx /= dist; dy /= dist;
-          o.x = cp.x + dx * o.r; o.y = cp.y + dy * o.r;
+          px = cp.x + dx * o.r; py = cp.y + dy * o.r;
         }
+        o.x += px - ref.x; o.y += py - ref.y;
         const vn = o.vx * dx + o.vy * dy;
         if (vn < 0) { o.vx -= 1.3 * vn * dx; o.vy -= 1.3 * vn * dy; }
       }
     }
     // robot vs object (two-body impulse; the object is a point mass with no spin)
-    const cp = closestOnObb(robot, o.x, o.y);
-    let nx = o.x - cp.x, ny = o.y - cp.y;
-    let dist = Math.hypot(nx, ny);
-    if (cp.inside || dist < o.r) {
-      if (cp.inside || dist < 1e-6) {
-        const f = forwardOf(robot.heading), r = rightOf(robot.heading);
-        const lf = (o.x - robot.x) * f.x + (o.y - robot.y) * f.y;
-        const lr = (o.x - robot.x) * r.x + (o.y - robot.y) * r.y;
-        if (robot.hl - Math.abs(lf) < robot.hw - Math.abs(lr)) { const sg = Math.sign(lf) || 1; nx = f.x * sg; ny = f.y * sg; }
-        else { const sg = Math.sign(lr) || 1; nx = r.x * sg; ny = r.y * sg; }
-        dist = 0;
-        o.x = cp.x + nx * o.r; o.y = cp.y + ny * o.r;
-      } else {
-        nx /= dist; ny /= dist;
-        o.x = cp.x + nx * o.r; o.y = cp.y + ny * o.r;
+    {
+      let ref = spinePoint(o, robot.x, robot.y);
+      if (o.lying) { const c0 = closestOnObb(robot, ref.x, ref.y); ref = spinePoint(o, c0.x, c0.y); }
+      const cp = closestOnObb(robot, ref.x, ref.y);
+      let nx = ref.x - cp.x, ny = ref.y - cp.y;
+      const dist = Math.hypot(nx, ny);
+      if (cp.inside || dist < o.r) {
+        let px: number, py: number;
+        if (cp.inside || dist < 1e-6) {
+          const f = forwardOf(robot.heading), r = rightOf(robot.heading);
+          const lf = (ref.x - robot.x) * f.x + (ref.y - robot.y) * f.y;
+          const lr = (ref.x - robot.x) * r.x + (ref.y - robot.y) * r.y;
+          if (robot.hl - Math.abs(lf) < robot.hw - Math.abs(lr)) { const sg = Math.sign(lf) || 1; nx = f.x * sg; ny = f.y * sg; }
+          else { const sg = Math.sign(lr) || 1; nx = r.x * sg; ny = r.y * sg; }
+          px = cp.x + nx * o.r; py = cp.y + ny * o.r;
+        } else {
+          nx /= dist; ny /= dist;
+          px = cp.x + nx * o.r; py = cp.y + ny * o.r;
+        }
+        o.x += px - ref.x; o.y += py - ref.y;
+        resolveRobotObject(w, cfg, d, o, cp.x, cp.y, nx, ny);
       }
-      resolveRobotObject(w, cfg, d, o, cp.x, cp.y, nx, ny);
     }
   }
-  // object-object
+  // object-object (lying objects collide along their spine)
   const n = w.objects.length;
   for (let i = 0; i < n; i++) {
     const a = w.objects[i];
@@ -314,9 +358,12 @@ function resolveObjects(w: World, cfg: RobotConfig, d: DerivedRobot, dt: number)
     for (let j = i + 1; j < n; j++) {
       const b = w.objects[j];
       if (b.state !== "field") continue;
-      const dx = b.x - a.x, dy = b.y - a.y;
+      const reach = a.r + b.r + (a.lying ? a.half ?? 0 : 0) + (b.lying ? b.half ?? 0 : 0);
+      if (Math.abs(b.x - a.x) > reach || Math.abs(b.y - a.y) > reach) continue;
+      let pa = spinePoint(a, b.x, b.y), pb = spinePoint(b, pa.x, pa.y);
+      pa = spinePoint(a, pb.x, pb.y); pb = spinePoint(b, pa.x, pa.y);
+      const dx = pb.x - pa.x, dy = pb.y - pa.y;
       const rr = a.r + b.r;
-      if (Math.abs(dx) > rr || Math.abs(dy) > rr) continue;
       const dist = Math.hypot(dx, dy);
       if (dist >= rr || dist < 1e-9) continue;
       const nx = dx / dist, ny = dy / dist;
@@ -363,6 +410,12 @@ function resolveRobotObject(w: World, cfg: RobotConfig, d: DerivedRobot, o: Game
 
 function updateMechanisms(w: World, cfg: RobotConfig): void {
   const s = w.robot;
+  // Pins standing inside a Cup ride with it
+  for (const o of w.objects) {
+    if (o.state !== "nested" || o.nestedIn === undefined) continue;
+    const cup = w.objects.find((q) => q.id === o.nestedIn);
+    if (cup && cup.state === "field") { o.x = cup.x; o.y = cup.y; }
+  }
   const f = forwardOf(s.heading), r = rightOf(s.heading);
   // carried objects follow the robot rigidly
   for (const o of w.objects) {
@@ -384,10 +437,14 @@ function updateMechanisms(w: World, cfg: RobotConfig): void {
     for (const o of w.objects) {
       if (o.state !== "field" || o.carriable || o.fixed) continue;
       if (!canHold(w, cfg, o.kind)) continue;
+      const inner = w.objects.find((q) => q.state === "nested" && q.nestedIn === o.id);
+      if (inner && (!canHold(w, cfg, inner.kind) || w.held.length + 2 > (cfg.intake?.capacity ?? 0))) continue; // a Cup with a Pin in it needs room for both
       if (closestOnObb(zone, o.x, o.y).inside) {
         o.state = "held";
+        if (o.lying) o.lying = false;
         w.held.push(o.id);
         w.events.push({ t: w.t, type: "pickup", id: o.id });
+        if (inner) { inner.state = "held"; inner.nestedIn = undefined; w.held.push(inner.id); w.events.push({ t: w.t, type: "pickup", id: inner.id }); }
       }
     }
   }
@@ -417,6 +474,11 @@ export function frontPoint(w: World, cfg: RobotConfig): Vec {
  * human-readable failure reason, or null on success. Which object is tried first: `prefer` kind, then held order.
  */
 export function placeHeld(w: World, cfg: RobotConfig, prefer?: string): string | null {
+  if (prefer === "all") {
+    let placed = 0, why: string | null = null;
+    for (let i = 0; i < 6 && w.held.length; i++) { why = placeHeld(w, cfg, undefined); if (why) break; placed++; }
+    return placed > 0 ? null : why;
+  }
   if (w.held.length === 0) return "nothing held to place";
   const fp = frontPoint(w, cfg);
   const f = forwardOf(w.robot.heading);
@@ -475,7 +537,7 @@ export function ejectHeld(w: World, cfg: RobotConfig, count = 1): void {
     const id = w.held.shift()!;
     const o = w.objects.find((q) => q.id === id);
     if (!o) continue;
-    const dist = cfg.length / 2 + o.r + 1;
+    const dist = cfg.length / 2 + o.r + 1 + i * 2.5;
     o.state = "field";
     o.x = s.x + f.x * dist;
     o.y = s.y + f.y * dist;

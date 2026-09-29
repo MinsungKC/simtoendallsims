@@ -64,7 +64,7 @@ export function RoutinePanel() {
         <Num label="Start Y" value={routine.start.y} onChange={(y) => st.setRoutine({ start: { ...routine.start, y } })} step={0.5} unit="in" />
         <Num label="Start heading" value={routine.start.heading} onChange={(heading) => st.setRoutine({ start: { ...routine.start, heading } })} step={1} unit="°" />
         <div className="btns">
-          <button onClick={st.mirror} title="Flip the whole routine across the field's center line">Mirror ↔ (red/blue)</button>
+          <button onClick={st.mirror} title={st.game().mirror === "rotate" ? "Turn the whole routine 180° about the field center (this field's red and blue sides swap under a rotation)" : "Flip the whole routine across the field's center line"}>{st.game().mirror === "rotate" ? "Other alliance ↻ (rotate 180°)" : "Mirror ↔ (red/blue)"}</button>
           <button onClick={st.clearRoutine}>Clear steps</button>
         </div>
       </Section>

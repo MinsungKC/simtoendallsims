@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { generate, TARGETS, type GenResult } from "../codegen";
+import { CODE_FRAMES } from "../core/frame";
 import { Badge, Check, IntList, Num, Sel, Section } from "./atoms";
 import { download, makeZip } from "./helpers";
 import { ident } from "../codegen/common";
@@ -15,17 +16,17 @@ const VERIFY: Record<string, string> = {
 };
 
 export function CodePanel() {
-  const { routine, robot, ports, target, setTarget, setPorts, recording, routines } = useEditor();
+  const { routine, robot, ports, target, setTarget, setPorts, recording, routines, codeFrame, setCodeFrame } = useEditor();
   const [fileIdx, setFileIdx] = useState(0);
   const [copied, setCopied] = useState(false);
 
   const result: GenResult | { error: string } = useMemo(() => {
     try {
-      return generate(target, { routine, cfg: robot, ports, recording: recording ?? undefined });
+      return generate(target, { routine, cfg: robot, ports, recording: recording ?? undefined, frame: codeFrame });
     } catch (e) {
       return { error: String(e) };
     }
-  }, [target, routine, robot, ports, recording]);
+  }, [target, routine, robot, ports, recording, codeFrame]);
 
   const setTracking = (i: number, patch: object) => setPorts({ tracking: robot.odom.trackingWheels.map((_, j) => ({ ...(ports.tracking[j] ?? { port: 11 + j }), ...(j === i ? patch : {}) })) });
 
@@ -38,6 +39,15 @@ export function CodePanel() {
           ))}
         </div>
         <p className="note">{TARGETS.find((t) => t.id === target)?.blurb}</p>
+      </Section>
+
+      <Section title="Coordinates in the code">
+        <div className="targets">
+          {CODE_FRAMES.map((f) => (
+            <button key={f.id} className={codeFrame === f.id ? "active" : ""} onClick={() => setCodeFrame(f.id)} title={f.hint}>{f.label}</button>
+          ))}
+        </div>
+        <p className="note">{CODE_FRAMES.find((f) => f.id === codeFrame)?.hint} The simulator itself always uses field coordinates.</p>
       </Section>
 
       <Section title="Wiring (ports)" open={false}>
@@ -94,7 +104,7 @@ export function CodePanel() {
                     while (used.has(name)) name = `${base}_${n++}`;
                     used.add(name);
                     const rec = simulate(r, robot, init, { seed: st.simOpts.seed });
-                    const res = generate(target, { routine: r, cfg: robot, ports, recording: rec, fnName: name });
+                    const res = generate(target, { routine: r, cfg: robot, ports, recording: rec, fnName: name, frame: codeFrame });
                     for (const f of res.files) files.push({ path: `${name}/${f.path}`, content: f.content });
                   }
                   download(`${ident(st.routine.name) || "project"}_all_${target}.zip`, makeZip(files).buffer as ArrayBuffer, "application/zip");

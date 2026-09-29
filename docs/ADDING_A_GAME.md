@@ -12,7 +12,7 @@ export const myGame: GameModule = {
   layoutApproximate: false,
   zones: [/* scoring zones: rect/circle, accepted object kinds, points */],
   starts: [/* start pose presets */],
-  lines: [], objects: [/* {id, kind, team, x, y, r, mass, drag, carriable?} */], obstacles: [/* AABBs */],
+  lines: [/* {x1,y1,x2,y2,color?,width?} - width (inches) draws tape */], objects: [/* {id, kind, team, x, y, r, mass, drag, carriable?; optional lying/half/angle (capsule pins), nestedIn, stackedIn} */], obstacles: [/* AABBs or convex polygons (`verts`) */],
   score: (world) => zoneScore(world, zones),
   notes: [],
 };

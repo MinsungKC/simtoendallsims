@@ -5,6 +5,8 @@ import { samplePath } from "../core/path";
 import type { PathSpec } from "../core/routine";
 import { defaultMotion } from "../core/routine";
 import { obstaclePoly } from "../core/world";
+import { drawCup, drawGoal, drawLoader, drawLyingPin, drawPerimeter, drawStandingPin, drawToggle, PALETTE, type Frame2D } from "./fieldArt";
+import { loaderOutline } from "../games/override";
 import { bearingDeg, frameIndex, lerpFrame, TEAM_COLOR } from "./helpers";
 import { useStore } from "./store";
 import { worldInit, type CustomField } from "../games/types";
@@ -20,6 +22,8 @@ interface Handle {
 }
 
 const HANDLE_R = 8;
+/** Field Perimeter and the Toggles that ride on it live outside the 144" of tiles */
+const MARGIN = 3;
 
 function snap(v: number): number {
   return Math.round(v * 4) / 4;
@@ -52,20 +56,24 @@ export function FieldCanvas() {
     const size = sizeRef.current;
     if (c.width !== Math.round(size * dpr)) { c.width = Math.round(size * dpr); c.height = Math.round(size * dpr); }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const S = size / fieldSize;
+    const S = size / (fieldSize + 2 * MARGIN);
     const px = (x: number) => size / 2 + x * S;
     const py = (y: number) => size / 2 - y * S;
     const dark = matchMedia("(prefers-color-scheme: dark)").matches;
     const C = dark
-      ? { tileA: "#1d2331", tileB: "#20283a", line: "#2f3a52", wall: "#6b7a9b", text: "#c9d1e3", plan: "#9fb0d3" }
-      : { tileA: "#e8ecf5", tileB: "#dfe5f1", line: "#c5cede", wall: "#6b7a9b", text: "#39435a", plan: "#5a6b93" };
+      ? { wall: "#6b7a9b", text: "#c9d1e3", plan: "#9fb0d3" }
+      : { wall: "#6b7a9b", text: "#39435a", plan: "#3b4a72" };
+    const F: Frame2D = { ctx, px, py, S };
+    const half = fieldSize / 2;
 
     ctx.clearRect(0, 0, size, size);
-    // 6x6 tiles (24 in)
-    const tile = size / 6;
-    for (let i = 0; i < 6; i++) for (let j = 0; j < 6; j++) { ctx.fillStyle = (i + j) % 2 ? C.tileA : C.tileB; ctx.fillRect(i * tile, j * tile, tile + 0.5, tile + 0.5); }
-    ctx.strokeStyle = C.line; ctx.lineWidth = 1;
-    for (let i = 1; i < 6; i++) { ctx.beginPath(); ctx.moveTo(i * tile, 0); ctx.lineTo(i * tile, size); ctx.moveTo(0, i * tile); ctx.lineTo(size, i * tile); ctx.stroke(); }
+    ctx.fillStyle = "#0b0b0d"; ctx.fillRect(0, 0, size, size);
+    // foam floor tiles (6 x 6 of 24 in) - always the real dark gray, so tape and game pieces read like the real field
+    const tile = (fieldSize / 6) * S;
+    for (let i = 0; i < 6; i++) for (let j = 0; j < 6; j++) { ctx.fillStyle = (i + j) % 2 ? PALETTE.floorA : PALETTE.floorB; ctx.fillRect(px(-half) + i * tile, py(half) + j * tile, tile + 0.5, tile + 0.5); }
+    ctx.strokeStyle = PALETTE.seam; ctx.lineWidth = Math.max(1, 0.25 * S);
+    for (let i = 1; i < 6; i++) { ctx.beginPath(); ctx.moveTo(px(-half) + i * tile, py(half)); ctx.lineTo(px(-half) + i * tile, py(-half)); ctx.moveTo(px(-half), py(half) + i * tile); ctx.lineTo(px(half), py(half) + i * tile); ctx.stroke(); }
+    drawPerimeter(F, half);
 
     // scoring zones
     for (const z of world.zones) {
@@ -75,78 +83,74 @@ export function FieldCanvas() {
     }
     // game tape lines and regions (Midfield, Load Zones, Autonomous Line ...)
     for (const poly of game.polys ?? []) {
-      ctx.beginPath(); poly.verts.forEach((v, i) => (i ? ctx.lineTo(px(v.x), py(v.y)) : ctx.moveTo(px(v.x), py(v.y)))); ctx.closePath();
+      ctx.beginPath(); poly.verts.forEach((v, i) => (i ? ctx.lineTo(px(v.x), py(v.y)) : ctx.moveTo(px(v.x), py(v.y)))); if (poly.closed !== false) ctx.closePath();
       if (poly.fill) { ctx.fillStyle = poly.fill; ctx.fill(); }
-      ctx.strokeStyle = poly.stroke ?? "#ffffff88"; ctx.lineWidth = 2; ctx.stroke();
+      ctx.strokeStyle = poly.stroke ?? "#ffffff88"; ctx.lineWidth = poly.strokeWidth ? poly.strokeWidth * S : 2; ctx.lineJoin = "miter"; ctx.lineCap = "butt"; ctx.stroke();
     }
-    for (const l of game.lines) { ctx.strokeStyle = l.color ?? "#ffffff88"; ctx.lineWidth = 2.5; ctx.setLineDash([10, 6]); ctx.beginPath(); ctx.moveTo(px(l.x1), py(l.y1)); ctx.lineTo(px(l.x2), py(l.y2)); ctx.stroke(); ctx.setLineDash([]); }
+    for (const l of game.lines) {
+      ctx.strokeStyle = l.color ?? "#ffffff88"; ctx.beginPath(); ctx.moveTo(px(l.x1), py(l.y1)); ctx.lineTo(px(l.x2), py(l.y2));
+      if (l.width) { ctx.lineWidth = l.width * S; ctx.lineCap = "butt"; ctx.stroke(); }
+      else { ctx.lineWidth = 2.5; ctx.setLineDash([10, 6]); ctx.stroke(); ctx.setLineDash([]); }
+    }
 
-    // static solid elements: real polygon footprints (octagonal Goals, Toggle bars, Loaders)
+    // static solid elements: real footprints (Goals, Loaders); anything else as a plain block
+    const outline = (verts: { x: number; y: number }[]) => { ctx.beginPath(); verts.forEach((v, i) => (i ? ctx.lineTo(px(v.x), py(v.y)) : ctx.moveTo(px(v.x), py(v.y)))); ctx.closePath(); };
     for (const o of world.obstacles) {
-      const poly = obstaclePoly(o);
-      ctx.beginPath(); poly.forEach((v, i) => (i ? ctx.lineTo(px(v.x), py(v.y)) : ctx.moveTo(px(v.x), py(v.y)))); ctx.closePath();
       const tag = o.tag ?? "";
-      let fill = "#59647d", stroke = "#2b3448";
-      if (tag.startsWith("goal:")) { const id = tag.slice(5); fill = id.startsWith("red") ? "#c8423f" : id.startsWith("blue") ? "#2f6fd6" : id === "tall" ? "#2a2f3a" : "#5a6070"; stroke = "#0009"; }
-      else if (tag === "loader") fill = o.label.includes("red") ? "#a04a4a" : "#4a6aa0";
-      else if (tag === "toggle") fill = "#00000000";
-      ctx.fillStyle = fill; ctx.fill(); ctx.strokeStyle = stroke; ctx.lineWidth = 1.5; ctx.stroke();
+      if (tag.startsWith("goal:")) { const id = tag.slice(5); drawGoal(F, o.x, o.y, id.startsWith("red") ? "red" : id.startsWith("blue") ? "blue" : "black", id === "tall"); continue; }
+      if (tag === "loader") { const red = o.label.includes("red"); drawLoader(F, loaderOutline(red ? -1 : 1, o.y), red); continue; }
+      outline(obstaclePoly(o)); ctx.fillStyle = "#59647d"; ctx.fill(); ctx.strokeStyle = "#2b3448"; ctx.lineWidth = 1.5; ctx.stroke();
     }
-    // Toggles: three-color bar showing the currently set color
+    // Toggles: bars on top of the Perimeter showing the color they are set to
     const toggleState = new Map<string, string>();
     for (const t of game.toggles ?? []) toggleState.set(t.id, t.state);
     for (const e of recording?.events ?? []) if (e.type === "toggle" && e.t <= time && e.toggle && e.color) toggleState.set(e.toggle, e.color);
-    for (const t of game.toggles ?? []) {
-      const horizontal = t.wall === "N" || t.wall === "S";
-      const col = toggleState.get(t.id) === "red" ? "#e5484d" : toggleState.get(t.id) === "blue" ? "#3e8bff" : "#e2b93b";
-      ctx.fillStyle = col;
-      const w = (horizontal ? 25.8 : 2.4) * S, h = (horizontal ? 2.4 : 25.8) * S;
-      ctx.fillRect(px(t.x) - w / 2, py(t.y) - h / 2, w, h);
-      ctx.strokeStyle = "#000a"; ctx.lineWidth = 1; ctx.strokeRect(px(t.x) - w / 2, py(t.y) - h / 2, w, h);
-    }
+    for (const t of game.toggles ?? []) drawToggle(F, t.wall, toggleState.get(t.id) ?? t.state);
 
-    // objects
+    // objects (Cups first so the Pins standing in them are drawn on top)
     const frames = recording?.frames;
     const fr = frames && frames.length ? lerpFrame(frames, time) : null;
     const meta = recording ? recording.world.objects : world.objects;
-    const C_PIN: Record<string, string> = { red: "#e5484d", blue: "#3e8bff", yellow: "#e2b93b" };
-    const drawPin = (x: number, y: number, r: number, halves: [string, string] | undefined, flip: boolean | undefined) => {
-      const a = halves ? C_PIN[flip ? halves[1] : halves[0]] : "#ccc", b = halves ? C_PIN[flip ? halves[0] : halves[1]] : "#ccc";
-      ctx.beginPath(); ctx.arc(px(x), py(y), r, Math.PI / 2, (3 * Math.PI) / 2); ctx.closePath(); ctx.fillStyle = a; ctx.fill();
-      ctx.beginPath(); ctx.arc(px(x), py(y), r, -Math.PI / 2, Math.PI / 2); ctx.closePath(); ctx.fillStyle = b; ctx.fill();
-      ctx.strokeStyle = "#0008"; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(px(x), py(y), r, 0, Math.PI * 2); ctx.stroke();
-    };
-    const drawCup = (x: number, y: number, r: number, opaqueUp: boolean | undefined) => {
-      ctx.beginPath(); ctx.arc(px(x), py(y), r, 0, Math.PI * 2); ctx.fillStyle = opaqueUp ? "#8b93a3cc" : "#dfe9f6aa"; ctx.fill();
-      ctx.strokeStyle = "#0009"; ctx.lineWidth = 1.5; ctx.stroke();
-      ctx.beginPath(); ctx.arc(px(x), py(y), r * 0.55, 0, Math.PI * 2); ctx.strokeStyle = "#0004"; ctx.stroke();
-    };
-    meta.forEach((o, i) => {
+    const at = (o: (typeof meta)[number], i: number) => {
       let x = o.x, y = o.y, st = 0;
       if (fr) { x = fr.objs[i * 3]; y = fr.objs[i * 3 + 1]; st = fr.objs[i * 3 + 2]; }
+      else if (o.stackedIn) st = 3;
+      else if (o.nestedIn !== undefined) st = 5;
       if (!fr && recording) { x = world.objects[i]?.x ?? o.x; y = world.objects[i]?.y ?? o.y; }
-      if (st === 1 || st === 3) return;
+      return { x, y, st };
+    };
+    const generic = (o: (typeof meta)[number], x: number, y: number) => {
       const r = Math.max(2, o.r * S);
-      if (o.kind === "pin") drawPin(x, y, r, o.halves, o.flip);
-      else if (o.kind === "cup") drawCup(x, y, r, o.opaqueUp);
-      else if (o.kind === "ring") { ctx.beginPath(); ctx.arc(px(x), py(y), r, 0, Math.PI * 2); ctx.strokeStyle = TEAM_COLOR[o.team]; ctx.lineWidth = Math.max(2, r * 0.45); ctx.stroke(); }
+      if (o.kind === "ring") { ctx.beginPath(); ctx.arc(px(x), py(y), r, 0, Math.PI * 2); ctx.strokeStyle = TEAM_COLOR[o.team]; ctx.lineWidth = Math.max(2, r * 0.45); ctx.stroke(); }
       else if (o.kind === "mobile-goal") { ctx.beginPath(); ctx.arc(px(x), py(y), r, 0, Math.PI * 2); ctx.fillStyle = "#e2b93b33"; ctx.fill(); ctx.strokeStyle = "#e2b93b"; ctx.lineWidth = 2.5; ctx.stroke(); }
       else { ctx.beginPath(); ctx.arc(px(x), py(y), r, 0, Math.PI * 2); ctx.fillStyle = TEAM_COLOR[o.team]; ctx.fill(); }
+    };
+    meta.forEach((o, i) => { const p = at(o, i); if (p.st === 1 || p.st === 3 || o.kind === "pin") return; if (o.kind === "cup") drawCup(F, p.x, p.y, o.opaqueUp); else generic(o, p.x, p.y); });
+    meta.forEach((o, i) => {
+      if (o.kind !== "pin") return;
+      const p = at(o, i);
+      if (p.st === 1 || p.st === 3) return;
+      const upper = o.halves ? o.halves[o.flip ? 0 : 1] : "yellow", lower = o.halves ? o.halves[o.flip ? 1 : 0] : "yellow";
+      if (o.lying && p.st === 0) drawLyingPin(F, p.x, p.y, o.angle ?? 0, o.halves, o.flip);
+      else drawStandingPin(F, p.x, p.y, upper, lower, p.st !== 5);
     });
-    // Goal stacks rebuilt from placement events up to the playhead: alternating Pin / Cup, drawn as a growing tower
+    // Goal stacks: what started Placed plus placement events up to the playhead, bottom to top
     if (game.goals?.length) {
       const stacks = new Map<string, number[]>();
+      for (const o of meta) if (o.stackedIn) stacks.set(o.stackedIn, [...(stacks.get(o.stackedIn) ?? []), o.id]);
       for (const e of recording?.events ?? []) if (e.type === "place" && e.t <= time && e.goal && e.id !== undefined) stacks.set(e.goal, [...(stacks.get(e.goal) ?? []), e.id]);
       for (const g of game.goals) {
         const ids = stacks.get(g.id) ?? [];
         ids.forEach((id, level) => {
-          const o = recording?.world.objects.find((q) => q.id === id);
+          const o = meta.find((q) => q.id === id);
           if (!o) return;
-          const off = level * 1.1;
-          if (o.kind === "pin") drawPin(g.x - off * 0.4, g.y + off * 0.4, Math.max(2.5, o.r * S * 1.3), o.halves, o.flip);
-          else drawCup(g.x - off * 0.4, g.y + off * 0.4, Math.max(3, o.r * S * 0.95), o.opaqueUp);
+          const off = level * 0.35;
+          if (o.kind === "pin") {
+            const upper = o.halves ? o.halves[o.flip ? 0 : 1] : "yellow", lower = o.halves ? o.halves[o.flip ? 1 : 0] : "yellow";
+            drawStandingPin(F, g.x - off, g.y + off, upper, lower, true);
+          } else drawCup(F, g.x - off, g.y + off, o.opaqueUp);
         });
-        if (ids.length) { ctx.fillStyle = "#fff"; ctx.font = "bold 10px system-ui"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(String(ids.length), px(g.x + 6), py(g.y - 6)); }
+        if (ids.length > 1) { ctx.fillStyle = "#fff"; ctx.font = "bold 10px system-ui"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(String(ids.length), px(g.x + 4.2), py(g.y - 4.2)); }
       }
     }
 
@@ -246,9 +250,7 @@ export function FieldCanvas() {
     // object handles in edit mode
     if (tool === "objects") world.objects.forEach((o) => handles.current.push({ kind: "object", id: String(o.id), x: o.x, y: o.y, r: Math.max(6, o.r * S) }));
 
-    // walls + labels
-    ctx.strokeStyle = C.wall; ctx.lineWidth = 4; ctx.strokeRect(0, 0, size, size);
-    void rightOf;
+    void rightOf; void C;
   }, [recording, time, routine, robot, selected, tool, world, planned, fieldSize]);
 
   useEffect(() => { draw(); }, [draw]);
@@ -263,7 +265,7 @@ export function FieldCanvas() {
 
   const toWorld = (e: React.PointerEvent) => {
     const r = ref.current!.getBoundingClientRect();
-    const S = r.width / fieldSize;
+    const S = r.width / (fieldSize + 2 * MARGIN);
     return { x: (e.clientX - r.left - r.width / 2) / S, y: -(e.clientY - r.top - r.height / 2) / S, S };
   };
 

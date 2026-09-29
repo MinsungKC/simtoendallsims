@@ -22,10 +22,12 @@ npm run build
   autosave, save/open project files.
 - **Simulation**: LemLib's control algorithms run against the physics with noisy odometry. Timeline scrubbing, speed/odometry-error/
   battery charts, warnings (timeouts, unreachable triggers, over 15 s), placement-error testing, auto-tuned starting gains.
-- **Games**: **Override (2026-27) is modelled from the game manual** - octagonal Goals, Toggles, Loaders with real collisions, Pins and Cups
-  that nest and stack, Toggle ownership, Midfield, Autonomous Win Point and rule checks (`docs/OVERRIDE.md`). Push Back and High Stakes are
+- **Games**: **Override (2026-27) is laid out from VEX's official top-down field graphic and the manual** - Goals, Loaders, Load Zones, the
+  Autonomous Line and Midfield drawn to scale, every Pin (lying, standing, nested) and Cup where it starts and drawn the way VEX draws it,
+  with real collisions, nesting/stacking, Toggle ownership, Autonomous Win Point and rule checks (`docs/OVERRIDE.md`). Push Back and High Stakes are
   approximate practice layouts; older seasons are stubs; blank field. Anything not read from a manual is flagged in the UI.
-- **Code**: see `docs/ADDING_A_TEMPLATE.md` for how each target is verified.
+- **Code**: generated **relative to the robot's starting position** by default (the robot starts at `(0, 0)` and keeps its heading; pick
+  `(0, 0, 0°)` or field coordinates in the Code tab). See `docs/ADDING_A_TEMPLATE.md` for how each target is verified.
 
 ## Honest limits
 Read `docs/PHYSICS.md` (model, assumptions, validation) and `docs/SOURCES.md` (what is and isn't verified). Gains it produces are

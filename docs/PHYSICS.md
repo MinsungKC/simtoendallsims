@@ -66,6 +66,11 @@ sim as "what a LemLib-class controller would do", not a bit-exact EZ-Template/JA
   Whether that matches your robot depends on your tires and floor. **Calibrate**: measure your robot's top speed and time to
   reach it, then adjust "Floor grip" and "Drive efficiency" (Robot tab -> Calibration).
 
+## Field objects
+Loose objects are point masses with sliding drag. A Pin lying on the floor is a **capsule** (a spine of half-length 2.2" swept by a
+1.0" radius) so robots, walls, Goals and other objects touch its 6.5" body, not just its center; standing Pins and Cups are circles.
+Pins standing in a Cup ride with it and are picked up with it.
+
 ## Things I could not verify from here
 Real V5 stall current, 5.5 W motor curve, tire friction on your tiles, battery internal resistance, and the Override manual's
 field geometry and motor caps. All are marked `UNVERIFIED` in the code/UI and listed in `SOURCES.md`.

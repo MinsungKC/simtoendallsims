@@ -52,6 +52,10 @@ export interface FieldPoly {
   label?: string;
   fill?: string;
   stroke?: string;
+  /** tape width, inches (default: a thin outline) */
+  strokeWidth?: number;
+  /** false: draw as an open polyline (tape that ends at the perimeter). Default true. */
+  closed?: boolean;
 }
 
 export interface RuleFinding {
@@ -70,6 +74,8 @@ export interface RuleContext {
 
 export interface FieldLine {
   x1: number; y1: number; x2: number; y2: number; color?: string;
+  /** tape width, inches */
+  width?: number;
 }
 
 export interface GameModule {
@@ -85,6 +91,8 @@ export interface GameModule {
   startingSize: Sourced<number> | null;
   /** Practice layout is approximate, NOT taken from the manual */
   layoutApproximate: boolean;
+  /** How the other Alliance's routine relates to this one: "flip" across the center line (default), or "rotate" 180 degrees */
+  mirror?: "flip" | "rotate";
   zones: ScoringZone[];
   starts: StartPosition[];
   lines: FieldLine[];

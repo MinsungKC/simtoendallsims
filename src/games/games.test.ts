@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { games, blank, highStakes, pushBack, override } from "./index";
-import { createWorld } from "../core/world";
+import { createWorld, spinePoint } from "../core/world";
+import { closestOnObb } from "../core/geometry";
 import { worldInit } from "./types";
 
 describe("game modules", () => {
@@ -25,8 +26,14 @@ describe("game modules", () => {
         expect(Math.abs(o.x) + o.r).toBeLessThanOrEqual(72);
         expect(Math.abs(o.y) + o.r).toBeLessThanOrEqual(72);
       }
+      // the default 15" x 15" robot standing on a listed start doesn't touch any starting object
       for (const s of g.starts) {
-        for (const o of g.objects) expect(Math.hypot(o.x - s.x, o.y - s.y)).toBeGreaterThan(12);
+        const box = { x: s.x, y: s.y, heading: s.heading, hl: 7.5, hw: 7.5 };
+        for (const o of g.objects) {
+          const ref = spinePoint(o, s.x, s.y);
+          const c = closestOnObb(box, ref.x, ref.y);
+          expect({ game: g.id, start: s.label, obj: o.id, gap: Math.hypot(ref.x - c.x, ref.y - c.y) - o.r > 0 }).toEqual({ game: g.id, start: s.label, obj: o.id, gap: true });
+        }
       }
     }
   });
@@ -57,6 +64,7 @@ describe("game modules", () => {
     for (const id of ["over-under", "spin-up", "tipping-point"]) expect(games.some((g) => g.id === id)).toBe(true);
   });
   it("unverified games are flagged as approximate", () => {
-    for (const g of [override, pushBack, highStakes]) expect(g.layoutApproximate).toBe(true);
+    for (const g of [pushBack, highStakes]) expect(g.layoutApproximate).toBe(true);
+    expect(override.layoutApproximate).toBe(false); // laid out from the official top-down graphic
   });
 });

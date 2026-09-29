@@ -134,3 +134,29 @@ export function mirrorRoutine(r: Routine): Routine {
     steps: r.steps.map(m),
   };
 }
+
+/**
+ * The other Alliance's version of a routine on a field that is symmetric under a 180-degree turn (Override): the red and blue
+ * Goals swap places under a rotation, not under a left-right flip. Turning direction and swing sides are unchanged (a rotation
+ * keeps handedness).
+ */
+export function rotateRoutine(r: Routine): Routine {
+  const p = (v: { x: number; y: number }) => ({ x: -v.x, y: -v.y });
+  const h = (a: number) => { let d = (a + 180) % 360; if (d > 180) d -= 360; if (d <= -180) d += 360; return d; };
+  const m = (s: Step): Step => {
+    const mo = s.motion;
+    let motion: MotionSpec = mo;
+    switch (mo.type) {
+      case "setPose": motion = { ...mo, ...p(mo), heading: h(mo.heading) }; break;
+      case "moveToPoint":
+      case "turnToPoint": motion = { ...mo, ...p(mo) }; break;
+      case "moveToPose": motion = { ...mo, ...p(mo), heading: h(mo.heading) }; break;
+      case "turnToHeading":
+      case "swingToHeading": motion = { ...mo, heading: h(mo.heading) }; break;
+      case "follow": motion = { ...mo, path: { ...mo.path, segments: mo.path.segments.map((sg) => ({ p: sg.p.map(p) as BezierSegment["p"] })) } }; break;
+      case "wait": break;
+    }
+    return { ...s, motion };
+  };
+  return { ...r, alliance: r.alliance === "red" ? "blue" : "red", start: { ...p(r.start), heading: h(r.start.heading) }, steps: r.steps.map(m) };
+}

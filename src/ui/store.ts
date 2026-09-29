@@ -1,11 +1,12 @@
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { defaultRobot, type RobotConfig } from "../core/robot";
-import { defaultMotion, emptyRoutine, mirrorRoutine, uid, type ActionSpec, type MotionSpec, type Routine, type Step } from "../core/routine";
+import { defaultMotion, emptyRoutine, mirrorRoutine, rotateRoutine, uid, type ActionSpec, type MotionSpec, type Routine, type Step } from "../core/routine";
 import { simulate, type Recording } from "../core/runtime";
 import { games } from "../games";
 import { worldInit, type CustomField, type GameModule } from "../games/types";
 import { defaultPorts, type Ports, type TargetId } from "../codegen";
+import type { CodeFrame } from "../core/frame";
 
 export type Tool = "select" | "moveToPoint" | "moveToPose" | "turnToPoint" | "follow" | "objects";
 export type Tab = "robot" | "routine" | "code" | "field";
@@ -27,6 +28,7 @@ interface Store {
   gameId: string;
   customField: CustomField | null;
   target: TargetId;
+  codeFrame: CodeFrame;
   simOpts: SimOptions;
 
   selected: string | null;
@@ -57,6 +59,7 @@ interface Store {
   setRoutine: (patch: Partial<Routine>, opts?: { history?: boolean }) => void;
   setGame: (id: string) => void;
   setTarget: (t: TargetId) => void;
+  setCodeFrame: (f: CodeFrame) => void;
   setSimOpts: (patch: Partial<SimOptions>) => void;
   setCustomField: (f: CustomField | null) => void;
 
@@ -96,12 +99,13 @@ export interface ProjectFile {
   gameId: string;
   customField: CustomField | null;
   target: TargetId;
+  codeFrame?: CodeFrame;
   simOpts: SimOptions;
 }
 
 const KEY = "simtoendallsims:project:v1";
 
-function initial(): Pick<Store, "robot" | "ports" | "routine" | "routines" | "active" | "gameId" | "customField" | "target" | "simOpts"> {
+function initial(): Pick<Store, "robot" | "ports" | "routine" | "routines" | "active" | "gameId" | "customField" | "target" | "codeFrame" | "simOpts"> {
   const robot = defaultRobot();
   const demo = demoRoutine();
   const base = {
@@ -113,6 +117,7 @@ function initial(): Pick<Store, "robot" | "ports" | "routine" | "routines" | "ac
     gameId: "high-stakes",
     customField: null as CustomField | null,
     target: "lemlib" as TargetId,
+    codeFrame: "start" as CodeFrame,
     simOpts: { seed: 1, placementError: { x: 0, y: 0, heading: 0 } },
   };
   try {
@@ -132,6 +137,7 @@ function initial(): Pick<Store, "robot" | "ports" | "routine" | "routines" | "ac
           gameId: p.gameId ?? base.gameId,
           customField: p.customField ?? null,
           target: p.target ?? base.target,
+          codeFrame: p.codeFrame ?? base.codeFrame,
           simOpts: { ...base.simOpts, ...(p.simOpts ?? {}) },
         };
       }
@@ -143,8 +149,9 @@ function initial(): Pick<Store, "robot" | "ports" | "routine" | "routines" | "ac
 }
 
 /**
- * A short Override auton that uses the real mechanics (red side, West quadrant): nest the Preload Pin in the short Goal,
- * grab a Cup from the wall stack, stack it over the Pin, then flip the West Toggle to red so the Pin's yellow half is Owned.
+ * A short Override auton that uses the real mechanics (red side, West quadrant): grab the outer Cup of the wall triple,
+ * stack it over the yellow Pin already Placed in the short West Goal, nest the Preload Pin in the Cup, then back up to the
+ * West wall and flip that Toggle to your color so the yellow Pin halves in this Quadrant are Owned.
  */
 export function overrideDemo(alliance: "red" | "blue" = "red"): Routine {
   const at = (x: number, y: number, heading = 0) => ({ x, y, heading });
@@ -154,17 +161,16 @@ export function overrideDemo(alliance: "red" | "blue" = "red"): Routine {
     name: "Override demo",
     gameId: "override",
     alliance: "red",
-    start: at(-64.5, 44, 180),
+    start: at(-64.5, 38, 180),
     steps: [
-      { id: uid(), motion: mv("moveToPoint", at(-59, 24.5), { timeout: 3000 }), actions: [] },
-      { id: uid(), motion: mv("turnToHeading", at(0, 0, 90)), actions: [a("place", { kind: "end" })] },
-      { id: uid(), motion: mv("turnToHeading", at(0, 0, 270)), actions: [a("intakeIn", { kind: "start" })] },
-      { id: uid(), motion: mv("turnToHeading", at(0, 0, 90)), actions: [a("intakeStop", { kind: "end" }), a("place", { kind: "end" }, "cup")] },
-      { id: uid(), motion: mv("moveToPoint", at(-59, 6), { timeout: 3000 }), actions: [] },
-      { id: uid(), motion: mv("turnToHeading", at(0, 0, 270)), actions: [a("toggleSet", { kind: "end" }, "red")] },
+      { id: uid(), motion: mv("moveToPoint", at(-64.5, 30), { timeout: 3000 }), actions: [a("intakeIn", { kind: "start" })] },
+      { id: uid(), motion: mv("moveToPoint", at(-58, 27), { forwards: false, timeout: 3000 }), actions: [a("intakeStop", { kind: "end" })] },
+      { id: uid(), motion: mv("turnToHeading", at(0, 0, 90)), actions: [a("place", { kind: "end" }, "cup"), a("place", { kind: "end" }, "pin")] },
+      { id: uid(), motion: mv("moveToPoint", at(-65, 8), { forwards: false, timeout: 3000 }), actions: [] },
+      { id: uid(), motion: mv("turnToHeading", at(0, 0, 270)), actions: [a("toggleSet", { kind: "end" }, alliance)] },
     ],
   };
-  return alliance === "red" ? r : mirrorRoutine(r);
+  return alliance === "red" ? r : rotateRoutine(r);
 }
 
 export function demoRoutine(): Routine {
@@ -187,7 +193,7 @@ const syncedRoutines = (s: Pick<Store, "routines" | "routine" | "active">): Rout
 
 const persist = (s: Store): void => {
   try {
-    const p: ProjectFile = { app: "simtoendallsims", version: 1, robot: s.robot, ports: s.ports, routine: s.routine, routines: syncedRoutines(s), active: s.active, gameId: s.gameId, customField: s.customField, target: s.target, simOpts: s.simOpts };
+    const p: ProjectFile = { app: "simtoendallsims", version: 1, robot: s.robot, ports: s.ports, routine: s.routine, routines: syncedRoutines(s), active: s.active, gameId: s.gameId, customField: s.customField, target: s.target, codeFrame: s.codeFrame, simOpts: s.simOpts };
     localStorage.setItem(KEY, JSON.stringify(p));
   } catch {
     /* ignore */
@@ -278,6 +284,7 @@ export const useStore = create<Store>((set, get) => {
       changed();
     },
     setTarget: (target) => { set({ target }); persist(get()); },
+    setCodeFrame: (codeFrame) => { set({ codeFrame }); persist(get()); },
     setSimOpts: (patch) => { set((s) => ({ simOpts: { ...s.simOpts, ...patch } })); changed(); },
     setCustomField: (customField) => { set({ customField }); changed(); },
 
@@ -363,7 +370,7 @@ export const useStore = create<Store>((set, get) => {
     },
     mirror: () => {
       pushHistory();
-      set((s) => ({ routine: mirrorRoutine(s.routine) }));
+      set((s) => ({ routine: (get().game().mirror === "rotate" ? rotateRoutine : mirrorRoutine)(s.routine) }));
       changed();
     },
     clearRoutine: () => {
@@ -375,7 +382,7 @@ export const useStore = create<Store>((set, get) => {
       pushHistory();
       const list = p.routines && p.routines.length ? p.routines : [p.routine];
       const active = Math.min(Math.max(0, p.active ?? 0), list.length - 1);
-      set({ robot: { ...defaultRobot(), ...p.robot, odom: { ...defaultRobot().odom, ...p.robot.odom } }, ports: p.ports, routine: list[active], routines: list, active, gameId: p.gameId, customField: p.customField ?? null, target: p.target ?? "lemlib", simOpts: p.simOpts ?? get().simOpts, selected: null });
+      set({ robot: { ...defaultRobot(), ...p.robot, odom: { ...defaultRobot().odom, ...p.robot.odom } }, ports: p.ports, routine: list[active], routines: list, active, gameId: p.gameId, customField: p.customField ?? null, target: p.target ?? "lemlib", codeFrame: p.codeFrame ?? "start", simOpts: p.simOpts ?? get().simOpts, selected: null });
       changed();
     },
 

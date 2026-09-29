@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { override, stackHalves, quadrantOf, sideOfLine, GOAL_ACROSS_FLATS, GOAL_HEIGHT } from "./override";
+import { override, stackHalves, quadrantOf, sideOfLine, GOAL_ACROSS_FLATS, GOAL_HEIGHT, PIN, CUP, LOAD_ZONE, goalOutline, loaderOutline } from "./override";
 import { worldInit } from "./types";
-import { createWorld, placeHeld, setToggle, stepWorld, type World } from "../core/world";
+import { createWorld, placeHeld, setToggle, spinePoint, stepWorld, type World } from "../core/world";
 import { defaultRobot, derive } from "../core/robot";
 import { simulate } from "../core/runtime";
 import { defaultMotion, type MotionSpec, type Routine } from "../core/routine";
@@ -43,7 +43,10 @@ describe("Override layout matches the manual's bill of materials", () => {
     expect(GOAL_HEIGHT.short).toBeCloseTo(5.77, 1);
     expect(GOAL_HEIGHT.alliance).toBeCloseTo(3.25, 2);
     expect(cups[0].r * 2).toBeCloseTo(3.15, 2);
-    expect(pins[0].r * 2).toBeCloseTo(1.6, 2);
+    expect(CUP.height).toBe(6.5);
+    expect(PIN.length).toBe(6.5);
+    // a lying Pin's collision spine plus its radius covers the 6.5" body up to the rounded ends (2 x (2.2 + 1.0) = 6.4")
+    expect(2 * (PIN.half + PIN.r)).toBeCloseTo(PIN.length, 0);
   });
   it("puts each Alliance's Goals in its own two Quadrants, on the Alliance's side of the Autonomous Line", () => {
     for (const g of override.goals!.filter((q) => q.alliance)) expect(sideOfLine(g.x, g.y)).toBe(g.alliance);
@@ -65,6 +68,107 @@ describe("Override layout matches the manual's bill of materials", () => {
   });
 });
 
+describe("layout taken from the official top-down graphic", () => {
+  const pins = override.objects.filter((o) => o.kind === "pin");
+  const cups = override.objects.filter((o) => o.kind === "cup");
+  it("36 Cups: 24 touch the Perimeter in eight triples, 12 sit on the interior diagonals", () => {
+    const wall = cups.filter((c) => Math.max(Math.abs(c.x), Math.abs(c.y)) > 69);
+    expect(wall).toHaveLength(24);
+    for (const c of wall) expect(Math.max(Math.abs(c.x), Math.abs(c.y)) + c.r).toBeCloseTo(72, 0);
+    // adjacent Cups in a triple are 3.2" apart (touching), the middle one 24.2" from the wall's middle
+    const north = wall.filter((c) => c.y > 69).map((c) => c.x).sort((a, b) => a - b);
+    expect(north.map((x) => +x.toFixed(1))).toEqual([-27.4, -24.2, -21, 21, 24.2, 27.4]);
+    for (const c of cups.filter((q) => !wall.includes(q))) expect(Math.abs(Math.abs(c.x) - Math.abs(c.y)) < 0.01 || Math.abs(c.x) + Math.abs(c.y) === 24 || c.x === 0 || c.y === 0).toBe(true);
+  });
+  it("16 Pins lie in four radial rings on the Autonomous Line, yellow end at the Cup and the colored end out", () => {
+    const lying = pins.filter((p) => p.lying);
+    expect(lying).toHaveLength(16);
+    for (const p of lying) {
+      expect(p.halves![0]).toBe("yellow");
+      expect(p.half).toBeCloseTo(PIN.half);
+      const cup = cups.find((c) => Math.hypot(c.x - p.x, c.y - p.y) < 5.2 && Math.abs(Math.abs(c.x) - Math.abs(c.y)) < 0.01 && !c.opaqueUp)!;
+      expect(cup).toBeDefined();
+      // the pin's far end (halves[1]) points away from the Cup
+      const a = (p.angle! * Math.PI) / 180;
+      const away = (p.x - cup.x) * Math.sin(a) + (p.y - cup.y) * Math.cos(a);
+      expect(away).toBeGreaterThan(4);
+      // its near end starts at the Cup's rim, not inside it
+      const near = Math.hypot(p.x - Math.sin(a) * p.half! - cup.x, p.y - Math.cos(a) * p.half! - cup.y);
+      expect(near - p.r).toBeGreaterThanOrEqual(cup.r - 0.2);
+    }
+    // north/east tips are blue, south/west tips red
+    for (const p of lying) expect(p.halves![1]).toBe(p.angle === 0 || p.angle === 90 ? "blue" : "red");
+  });
+  it("12 Pins stand in Cups (8 yellow in wall triples, 4 yellow on the diagonal) plus 4 red/blue on the Midfield corners", () => {
+    const nested = pins.filter((p) => p.nestedIn !== undefined);
+    expect(nested).toHaveLength(16);
+    for (const p of nested) { const c = cups.find((q) => q.id === p.nestedIn)!; expect(c.x).toBe(p.x); expect(c.y).toBe(p.y); }
+    const mid = nested.filter((p) => p.halves!.includes("red"));
+    expect(mid).toHaveLength(4);
+    for (const p of mid) expect(Math.abs(p.x) + Math.abs(p.y)).toBe(24);
+  });
+  it("five yellow Pins start Placed in the four short Goals and the tall Goal; Alliance Goals start empty; score is 0", () => {
+    const w = world();
+    const pre = w.goals.filter((g) => g.stack.length);
+    expect(pre.map((g) => g.id).sort()).toEqual(["short-E", "short-N", "short-S", "short-W", "tall"]);
+    for (const g of pre) expect(g.stack.map((i) => i.kind)).toEqual(["pin"]);
+    expect(w.goals.filter((g) => g.alliance).every((g) => g.stack.length === 0)).toBe(true);
+    const s = override.score(w);
+    expect([s.red, s.blue]).toEqual([0, 0]);
+  });
+  it("Goals are chamfered squares (octagons) and Loaders are trapezoids narrowing away from the wall", () => {
+    const g = goalOutline(0, 0);
+    expect(g).toHaveLength(8);
+    const l = loaderOutline(-1, 60.2);
+    expect(l).toHaveLength(4);
+    expect(Math.abs(l[0].x)).toBe(72);
+    expect(Math.abs(l[1].x)).toBeCloseTo(68.2);
+    expect(l[3].y - l[0].y).toBeGreaterThan(l[2].y - l[1].y); // wider at the wall
+    expect(LOAD_ZONE.depth).toBe(24);
+  });
+  it("Toggles ride on the Perimeter: they are not obstacles inside the Field", () => {
+    expect(override.obstacles.some((o) => o.tag === "toggle")).toBe(false);
+    expect(override.toggles!.every((t) => Math.max(Math.abs(t.x), Math.abs(t.y)) === 72)).toBe(true);
+  });
+});
+
+describe("lying Pins and nested Pins in play", () => {
+  it("a lying Pin collides along its whole length, and stops at the wall with its tip, not its center", () => {
+    const w = createWorld({ ...worldInit(override), objects: [{ id: 1, kind: "pin", team: "neutral", x: 60, y: 0, r: PIN.r, mass: PIN.mass, drag: 30, lying: true, half: PIN.half, angle: 90, halves: ["yellow", "red"] }], goals: [], obstacles: [] }, { x: 0, y: -40, heading: 0 });
+    w.objects[0].vx = 80;
+    let maxTip = 0;
+    for (let i = 0; i < 400; i++) { stepWorld(w, cfg, 0, 0, 0.005); maxTip = Math.max(maxTip, w.objects[0].x + PIN.half + PIN.r); }
+    expect(maxTip).toBeLessThanOrEqual(72.001); // never through the wall
+    expect(maxTip).toBeGreaterThan(71.9); // and reached it with the tip, 3.2" past the center
+    expect(spinePoint(w.objects[0], 0, 0).y).toBeCloseTo(0);
+  });
+  it("driving into the end of a lying Pin pushes it before the robot reaches its center", () => {
+    const pin = { id: 1, kind: "pin", team: "neutral" as const, x: 0, y: 12, r: PIN.r, mass: PIN.mass, drag: 30, lying: true, half: PIN.half, angle: 0, halves: ["yellow", "red"] as [string, string] };
+    const w = createWorld({ ...worldInit(override), objects: [pin], goals: [], obstacles: [], rules: undefined }, { x: 0, y: -10, heading: 0 });
+    w.robotBox = { hl: cfg.length / 2, hw: cfg.width / 2 };
+    const d = derive(cfg);
+    let touchedAt = 0;
+    for (let i = 0; i < 400 && !touchedAt; i++) { stepWorld(w, cfg, 0.6, 0.6, 0.005, d); if (w.objects[0].y > 12.05) touchedAt = w.robot.y; }
+    // the pin's near end is 12 - 2.2 - 1.0 = 8.8; the robot's front (7.5 ahead of center) meets it around y = 1.3, far before y = 4.5
+    expect(touchedAt).toBeGreaterThan(-1);
+    expect(touchedAt).toBeLessThan(3);
+  });
+  it("picking up a Cup that has a Pin standing in it takes both", () => {
+    const yellowStack = override.objects.find((o) => o.kind === "cup" && o.x === 24 && o.y === 24)!;
+    const w = createWorld(worldInit(override, "red"), { x: 24, y: 24 - 12, heading: 0 });
+    w.robotBox = { hl: cfg.length / 2, hw: cfg.width / 2 };
+    w.held.length = 0;
+    for (const o of w.objects) if (o.held) { o.held = false; o.state = "field"; o.x = 0; o.y = -60; }
+    const d = derive(cfg);
+    w.mech.intake = 1;
+    for (let i = 0; i < 400; i++) stepWorld(w, cfg, 0.5, 0.5, 0.005, d);
+    const inner = w.objects.find((o) => o.nestedIn === undefined && o.kind === "pin" && Math.hypot(o.x - 24, o.y - 24) < 0.5 && o.state === "held");
+    void inner;
+    expect(w.objects.find((o) => o.id === yellowStack.id)!.state).toBe("held");
+    expect(w.held.length).toBe(2);
+  });
+});
+
 describe("collisions with the real shapes", () => {
   it("the robot cannot drive through the octagonal center Goal", () => {
     const w = world("red", { x: 0, y: -40, heading: 0 });
@@ -78,7 +182,7 @@ describe("collisions with the real shapes", () => {
     for (let i = 0; i < 400; i++) stepWorld(w, cfg, 0, 0, 0.005);
     expect(w.objects[0].y).toBeLessThan(-GOAL_ACROSS_FLATS / 2);
   });
-  it("the robot cannot drive through a Toggle bar", () => {
+  it("the Perimeter stops the robot at the wall (Toggles ride on top of it, outside the tiles)", () => {
     const w = world("red", { x: 40, y: 50, heading: 0 });
     w.robot.heading = 0;
     const d = derive(cfg);
@@ -106,7 +210,7 @@ describe("nesting and stacking (SC2)", () => {
     expect(rules.possession).toEqual({ pin: 1, cup: 1 });
   });
   it("place action nests the held Pin into the Goal ahead; the preload is a Pin of the Alliance color", () => {
-    const w = world("red", { x: -64.5, y: -24, heading: 90 }); // red West Goal at (-48,-24), robot facing it
+    const w = world("red", { x: -60, y: -24, heading: 90 }); // red West Goal at (-48,-24), robot facing it
     expect(w.held).toHaveLength(1);
     expect(w.objects.find((o) => o.id === w.held[0])!.halves).toEqual(["red", "yellow"]);
     expect(placeHeld(w, cfg)).toBeNull();
@@ -190,7 +294,7 @@ describe("scoring (SC3, SC5, SC6)", () => {
 
 describe("end-to-end: a routine that scores and gets rule-checked", () => {
   const mv = (type: MotionSpec["type"], p: { x: number; y: number; heading: number }, patch: object = {}) => ({ ...defaultMotion(type, p), ...patch }) as MotionSpec;
-  const run = (steps: Routine["steps"], start = { x: -64.5, y: -24, heading: 90 }, alliance: "red" | "blue" = "red") => {
+  const run = (steps: Routine["steps"], start = { x: -60, y: -24, heading: 90 }, alliance: "red" | "blue" = "red") => {
     const routine: Routine = { name: "t", gameId: "override", alliance, start, steps };
     const rec = simulate(routine, cfg, worldInit(override, alliance));
     return { rec, findings: override.check!({ routine, cfg, recording: rec, world: rec.world }), score: override.score(rec.world) };
@@ -229,10 +333,23 @@ describe("Override demo routine (used by the UI)", () => {
     expect(findings.filter((f) => f.level === "error")).toEqual([]);
     expect(rec.warnings.map((w) => w.text)).toEqual([]);
     const goal = rec.world.goals.find((g) => g.id === "short-W")!;
-    expect(goal.stack.map((s) => s.kind)).toEqual(["pin", "cup"]);
+    // the yellow Pin that starts in the Goal, a Cup over it, and the Preload nested in the Cup
+    expect(goal.stack.map((s) => s.kind)).toEqual(["pin", "cup", "pin"]);
     expect(rec.world.toggles.find((t) => t.wall === "W")!.state).toBe("red");
-    // red half 5 + the Pin's yellow half, visible through the Cup's clear lower socket and Owned via the red Toggle: 10
-    expect(override.score(rec.world).red).toBe(15);
+    // three yellow halves are visible and Owned through the red West Toggle
+    expect(override.score(rec.world).red).toBe(30);
     expect(rec.duration).toBeLessThan(15);
+  });
+  it("the blue version is the red one turned 180 degrees (the field's symmetry) and runs just as cleanly", async () => {
+    const { overrideDemo } = await import("../ui/store");
+    const routine = overrideDemo("blue");
+    expect(routine.alliance).toBe("blue");
+    expect(routine.start).toEqual({ x: 64.5, y: -38, heading: 0 });
+    const rec = simulate(routine, cfg, worldInit(override, "blue"));
+    expect(override.check!({ routine, cfg, recording: rec, world: rec.world }).filter((f) => f.level === "error")).toEqual([]);
+    expect(rec.warnings.map((w) => w.text)).toEqual([]);
+    expect(rec.world.goals.find((g) => g.id === "short-E")!.stack.map((s) => s.kind)).toEqual(["pin", "cup", "pin"]);
+    expect(rec.world.toggles.find((t) => t.wall === "E")!.state).toBe("blue");
+    expect(override.score(rec.world).blue).toBe(30);
   });
 });

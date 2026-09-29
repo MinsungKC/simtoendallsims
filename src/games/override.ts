@@ -1,42 +1,48 @@
 /**
- * VEX V5RC Override (2026-27). Sources, by confidence:
- *  - manual (Game Manual v2.0): field 12'x12' on a 6x6 array of 24" tiles; Cup 3.15" x 6.5" (two halves, one clear one
- *    opaque); Pin ~1.6" x 6.5" (two colored halves); Goals are octagonal, 8.7" (center) / 5.8" (neutral) / 3.25"
- *    (Alliance) tall; Toggles 25.8" long with ~2.05" faces on the Field Perimeter at each wall's center; 4 Loaders;
- *    scoring rules SC1-SC8, starting/expansion rules SG1-SG13; object counts (see bill of materials below).
- *  - community: goal/toggle/loader POSITIONS on the 24" grid (three independent public sources derived from VEX's official
- *    VR playground data agree), goal footprint (142.5 mm across flats), Midfield size, and the STARTING LAYOUT of the
- *    on-field Pins/Cups (a reconstruction of Figure FO-2, consistent with the manual's counts).
- *  - assumed: Loader footprint, Load Zone size, Pin physics radius.
- * Appendix A's dimensioned drawings and Figure FO-2 are images and could not be read.
+ * VEX V5RC Override (2026-27), laid out from VEX's official top-down field graphic (Override H2H, the drawing that ships with
+ * the Game Manual's field pages) plus the manual text. Sources, by confidence:
+ *  - manual (Game Manual v2.0): field 12'x12' on a 6x6 array of 24" tiles; Cup 3.15" x 6.5" (two halves: one clear, one
+ *    opaque); Pin ~1.6" x 6.5" (two colored halves); Goals octagonal, 8.7" (center) / 5.8" (neutral) / 3.25" (Alliance) tall;
+ *    Toggles 25.8" long, ~2.05" faces, mounted on the Field Perimeter; 9 Goals, 4 Loaders, 4 Toggles; scoring rules SC1-SC8,
+ *    starting/expansion rules SG1-SG13; object counts (37 Pins + 36 Cups on the Field).
+ *  - official graphic (measured in pixels against the 144" square, cross-checked with the 24" tile seams and the Goal grid):
+ *    where every Pin, Cup, Goal, Loader, Toggle and tape line sits, the shape and colors of each, which way each object
+ *    faces, and the five Pins that start Placed in the neutral Goals.
+ *  - assumed: physics proxies (Pin radius/spine, Loader collision box), Pin mass.
+ * Appendix A's dimensioned drawings are images that could not be read; sizes taken from the graphic carry ~0.2" of error.
  */
-import { corners, pointInConvex, polysOverlap, rectVerts, regularPolygon, type Vec } from "../core/geometry";
+import { corners, pointInConvex, polysOverlap, rectVerts, type Vec } from "../core/geometry";
 import type { GameRules, GoalState, Obstacle, ToggleState, World } from "../core/world";
-import type { FieldPoly, GameModule, RuleFinding, ScoreResult } from "./types";
+import type { FieldLine, FieldPoly, GameModule, RuleFinding, ScoreResult } from "./types";
 
 const IN_PER_MM = 1 / 25.4;
-export const GOAL_ACROSS_FLATS = 142.5 * IN_PER_MM; // 5.61"
+export const GOAL_ACROSS_FLATS = 142.5 * IN_PER_MM; // 5.61" (the graphic shows ~5.8" incl. the flange)
+export const GOAL_CHAMFER = 0.95;
 export const GOAL_HEIGHT = { tall: 222.7 * IN_PER_MM, short: 146.5 * IN_PER_MM, alliance: 82.5 * IN_PER_MM };
 export const TOGGLE_LENGTH = 25.8;
 export const TOGGLE_FACE = 2.05;
 export const CUP = { r: 3.15 / 2, height: 6.5, mass: 0.078 };
-export const PIN = { r: 1.6 / 2, height: 6.5, mass: 0.073 };
-export const MIDFIELD_HALF_DIAGONAL = 24; // community sources disagree (17 vs 24); 24 matches the official VR data
+/** A Pin is two truncated cones (1.3" at the tip, 2.2" at the middle) with a 3.1" flange where they meet; 6.5" long. */
+export const PIN = { r: 1.0, length: 6.5, half: 2.2, mass: 0.073, flange: 3.1 };
+export const MIDFIELD_HALF_DIAGONAL = 24;
+export const LOAD_ZONE = { inner: 60.9, depth: 24 }; // outer tape edge x = +-60.9 (11.1" wide), 24" along the wall
 const HALF = 72;
-
-type Obj = GameModule["objects"][number];
-let nextId = 1;
-const pin = (a: string, b: string, x: number, y: number, flip = false): Obj => ({
-  id: nextId++, kind: "pin", team: a === "yellow" ? "neutral" : (a as "red" | "blue"), x, y, r: PIN.r, mass: PIN.mass, drag: 30, halves: [a, b], flip,
-});
-const cup = (x: number, y: number, opaqueUp: boolean): Obj => ({ id: nextId++, kind: "cup", team: "neutral", x, y, r: CUP.r, mass: CUP.mass, drag: 30, opaqueUp });
 
 export type Quadrant = "N" | "E" | "S" | "W";
 export function quadrantOf(x: number, y: number): Quadrant {
   return Math.abs(y) > Math.abs(x) ? (y > 0 ? "N" : "S") : x > 0 ? "E" : "W";
 }
 
-// ---- goals (positions: community, on the 24" grid; center Goal is the origin)
+/** The Goal footprint: a square with chamfered corners (an octagon with long N/E/S/W flats). */
+export function goalOutline(x: number, y: number, pad = 0): Vec[] {
+  const h = GOAL_ACROSS_FLATS / 2 + pad, c = GOAL_CHAMFER + pad * 0.4;
+  return [
+    { x: x + h, y: y - (h - c) }, { x: x + h, y: y + (h - c) }, { x: x + (h - c), y: y + h }, { x: x - (h - c), y: y + h },
+    { x: x - h, y: y + (h - c) }, { x: x - h, y: y - (h - c) }, { x: x - (h - c), y: y - h }, { x: x + (h - c), y: y - h },
+  ];
+}
+
+// ---- goals (on the 24" grid; the tall center Goal is the origin)
 const goalDefs: Omit<GoalState, "stack">[] = [
   { id: "tall", x: 0, y: 0, kind: "tall", height: GOAL_HEIGHT.tall, reach: 11 },
   { id: "short-N", x: -24, y: 48, kind: "short", height: GOAL_HEIGHT.short, reach: 11 },
@@ -49,61 +55,85 @@ const goalDefs: Omit<GoalState, "stack">[] = [
   { id: "blue-E", x: 48, y: 24, kind: "alliance", alliance: "blue", height: GOAL_HEIGHT.alliance, reach: 11 },
 ];
 
+// ---- Toggles ride on top of the Field Perimeter (outside the tiles), centered on each wall
 const toggleDefs: ToggleState[] = [
-  { id: "toggle-N", x: 0, y: HALF - TOGGLE_FACE * 0.45, wall: "N", state: "yellow" },
-  { id: "toggle-E", x: HALF - TOGGLE_FACE * 0.45, y: 0, wall: "E", state: "yellow" },
-  { id: "toggle-S", x: 0, y: -(HALF - TOGGLE_FACE * 0.45), wall: "S", state: "yellow" },
-  { id: "toggle-W", x: -(HALF - TOGGLE_FACE * 0.45), y: 0, wall: "W", state: "yellow" },
+  { id: "toggle-N", x: 0, y: HALF, wall: "N", state: "yellow" },
+  { id: "toggle-E", x: HALF, y: 0, wall: "E", state: "yellow" },
+  { id: "toggle-S", x: 0, y: -HALF, wall: "S", state: "yellow" },
+  { id: "toggle-W", x: -HALF, y: 0, wall: "W", state: "yellow" },
 ];
 
-const LOADER_W = 13.4, LOADER_D = 9.4; // assumed footprint (along wall x depth)
+// ---- Loaders: small trapezoid chutes on the perimeter, 4.4" wide at the wall narrowing to 3.0" over 3.8"
+export const LOADER = { y: 60.2, wallWidth: 4.4, tipWidth: 3.0, depth: 3.8 };
 const loaderDefs = [
-  { id: "loader-red-N", x: -(HALF - LOADER_D / 2), y: 60 },
-  { id: "loader-red-S", x: -(HALF - LOADER_D / 2), y: -60 },
-  { id: "loader-blue-N", x: HALF - LOADER_D / 2, y: 60 },
-  { id: "loader-blue-S", x: HALF - LOADER_D / 2, y: -60 },
+  { id: "loader-red-N", side: -1, y: LOADER.y }, { id: "loader-red-S", side: -1, y: -LOADER.y },
+  { id: "loader-blue-N", side: 1, y: LOADER.y }, { id: "loader-blue-S", side: 1, y: -LOADER.y },
 ];
+export function loaderOutline(side: number, y: number): Vec[] {
+  const w = HALF * side, t = (HALF - LOADER.depth) * side;
+  return [{ x: w, y: y - LOADER.wallWidth / 2 }, { x: t, y: y - LOADER.tipWidth / 2 }, { x: t, y: y + LOADER.tipWidth / 2 }, { x: w, y: y + LOADER.wallWidth / 2 }];
+}
 
 const obstacles: Obstacle[] = [
-  ...goalDefs.map((g) => ({ x: g.x, y: g.y, w: GOAL_ACROSS_FLATS, h: GOAL_ACROSS_FLATS, label: g.id, verts: regularPolygon(g.x, g.y, 8, GOAL_ACROSS_FLATS), tag: `goal:${g.id}` })),
-  ...toggleDefs.map((t) => {
-    const horizontal = t.wall === "N" || t.wall === "S";
-    const w = horizontal ? TOGGLE_LENGTH : TOGGLE_FACE * 0.9;
-    const h = horizontal ? TOGGLE_FACE * 0.9 : TOGGLE_LENGTH;
-    return { x: t.x, y: t.y, w, h, label: t.id, tag: "toggle" };
+  ...goalDefs.map((g) => ({ x: g.x, y: g.y, w: GOAL_ACROSS_FLATS, h: GOAL_ACROSS_FLATS, label: g.id, verts: goalOutline(g.x, g.y), tag: `goal:${g.id}` })),
+  ...loaderDefs.map((l) => {
+    const verts = loaderOutline(l.side, l.y);
+    return { x: (HALF - LOADER.depth / 2) * l.side, y: l.y, w: LOADER.depth, h: LOADER.wallWidth, label: l.id, verts, tag: "loader" };
   }),
-  ...loaderDefs.map((l) => ({ x: l.x, y: l.y, w: LOADER_D, h: LOADER_W, label: l.id, tag: "loader" })),
 ];
 
-// ---- starting objects (reconstruction of Figure FO-2; see header)
-nextId = 1;
+// ---- starting objects (from the official top-down graphic)
+type Obj = GameModule["objects"][number];
+let nextId = 1;
 const objects: Obj[] = [];
-const NEST = 2.6; // nested Pin-in-Cup pairs are modelled side by side (no compound bodies yet)
-const stackAt = (x: number, y: number, opaqueUp: boolean, a: string, b: string) => {
-  objects.push(cup(x, y, opaqueUp));
-  objects.push(pin(a, b, x + NEST, y));
-};
-// four Cups on the Autonomous Line, each ringed by four sideways Pins (8 red/yellow + 8 blue/yellow)
-const lineCups: [number, number][] = [[-24, 24], [24, -24], [48, -48], [-48, 48]];
-const ring = [[-8, 0], [8, 0], [0, 8], [0, -8]];
-const ringColors: [string, string][] = [["red", "yellow"], ["blue", "yellow"], ["blue", "yellow"], ["red", "yellow"]];
-for (const [cx, cy] of lineCups) {
-  objects.push(cup(cx, cy, false));
-  ring.forEach(([dx, dy], i) => objects.push(pin(ringColors[i][0], ringColors[i][1], cx + dx, cy + dy)));
-}
-// four Cup+Pin stacks on the Midfield corners; Pins are red/blue
-for (const [cx, cy] of [[0, MIDFIELD_HALF_DIAGONAL], [MIDFIELD_HALF_DIAGONAL, 0], [0, -MIDFIELD_HALF_DIAGONAL], [-MIDFIELD_HALF_DIAGONAL, 0]]) stackAt(cx, cy, false, "red", "blue");
-// yellow stacks on the other diagonal
-for (const [cx, cy] of [[24, 24], [-24, -24], [48, 48], [-48, -48]]) stackAt(cx, cy, false, "yellow", "yellow");
-// toggle stacks: 6 gray-side-up Cups and 2 yellow Pins beside each Toggle
+const add = (o: Omit<Obj, "id">): Obj => { const full = { id: nextId++, ...o } as Obj; objects.push(full); return full; };
+const cup = (x: number, y: number, opaqueUp: boolean): Obj => add({ kind: "cup", team: "neutral", x, y, r: CUP.r, mass: CUP.mass, drag: 30, opaqueUp });
+/** A Pin standing upright: `halves` are [lower, upper]; `flip` swaps which half is up. */
+const standingPin = (x: number, y: number, a: string, b: string, extra: Partial<Obj> = {}): Obj =>
+  add({ kind: "pin", team: a === "yellow" && b === "yellow" ? "neutral" : a === "yellow" ? (b as "red" | "blue") : (a as "red" | "blue"), x, y, r: PIN.r, mass: PIN.mass, drag: 30, halves: [a, b], flip: false, ...extra });
+/** A Pin lying on the floor pointing `angle` degrees (0 = +y, clockwise) with its halves[1] end farthest out. */
+const lyingPin = (x: number, y: number, a: string, b: string, angle: number): Obj =>
+  standingPin(x, y, a, b, { lying: true, half: PIN.half, angle });
+
+// 24 Cups (gray half up) in eight touching triples along the perimeter, each triple centered 24.2" from the wall's middle,
+// with a yellow Pin standing in the middle Cup
+const WALL_CUP = HALF - CUP.r - 0.05;
+const TRIPLE = 3.2;
 for (const wall of ["N", "E", "S", "W"] as const) {
   const sgn = wall === "N" || wall === "E" ? 1 : -1;
-  const at = (t: number): [number, number] => (wall === "N" || wall === "S" ? [t, sgn * (HALF - 2.4)] : [sgn * (HALF - 2.4), t]);
-  for (const t of [-24, -19.2, -14.4, 14.4, 19.2, 24]) { const [x, y] = at(t); objects.push(cup(x, y, true)); }
-  for (const t of [-19.2, 19.2]) { const [x, y] = at(t); objects.push(pin("yellow", "yellow", x + (wall === "N" || wall === "S" ? 0 : sgn * -NEST), y + (wall === "N" || wall === "S" ? sgn * -NEST : 0))); }
+  for (const side of [-1, 1]) {
+    const c = side * 24.2;
+    for (const k of [-1, 0, 1]) {
+      const along = c + k * TRIPLE;
+      const [x, y] = wall === "N" || wall === "S" ? [along, sgn * WALL_CUP] : [sgn * WALL_CUP, along];
+      const cp = cup(x, y, true);
+      if (k === 0) standingPin(x, y, "yellow", "yellow", { nestedIn: cp.id });
+    }
+  }
 }
-// loose yellow Pins near the Midfield
-for (const [x, y] of [[-36, 0], [-12, 0], [12, 0], [36, 0], [0, -12]]) objects.push(pin("yellow", "yellow", x, y));
+// four Cups (clear half up) on the Autonomous Line, each with four Pins lying radially: yellow end at the Cup, colored end out
+// (north/east: blue, south/west: red)
+const CLUSTER_R = 4.9;
+for (const [cx, cy] of [[-24, 24], [24, -24], [48, -48], [-48, 48]] as const) {
+  cup(cx, cy, false);
+  lyingPinRing(cx, cy);
+}
+function lyingPinRing(cx: number, cy: number): void {
+  const dirs: [number, number, number, string][] = [[0, 1, 0, "blue"], [1, 0, 90, "blue"], [0, -1, 180, "red"], [-1, 0, 270, "red"]];
+  for (const [dx, dy, ang, tip] of dirs) lyingPin(cx + dx * CLUSTER_R, cy + dy * CLUSTER_R, "yellow", tip, ang);
+}
+// four yellow Pins standing in Cups on the Quadrant-boundary diagonal
+for (const [cx, cy] of [[24, 24], [-24, -24], [48, 48], [-48, -48]] as const) {
+  const cp = cup(cx, cy, false);
+  standingPin(cx, cy, "yellow", "yellow", { nestedIn: cp.id });
+}
+// four red/blue Pins standing in Cups on the corners of the Midfield: blue up on the N and E, red up on the S and W
+for (const [cx, cy, blueUp] of [[0, 24, true], [24, 0, true], [0, -24, false], [-24, 0, false]] as const) {
+  const cp = cup(cx, cy, false);
+  standingPin(cx, cy, "red", "blue", { nestedIn: cp.id, flip: !blueUp });
+}
+// five yellow Pins start Placed in the neutral Goals (the four short ones and the tall center Goal)
+for (const g of goalDefs.filter((q) => q.kind !== "alliance")) standingPin(g.x, g.y, "yellow", "yellow", { stackedIn: g.id });
 
 // ---- rules
 const overrideRules: GameRules = {
@@ -219,7 +249,7 @@ export function overrideChecks({ routine, cfg, recording, world }: { routine: im
     if (!hitGoal) {
       for (const g of world.goals) {
         if (g.alliance && g.alliance !== mine) {
-          const gp = regularPolygon(g.x, g.y, 8, GOAL_ACROSS_FLATS + 0.4);
+          const gp = goalOutline(g.x, g.y, 0.2);
           if (polysOverlap(poly, gp)) { hitGoal = true; out.push({ level: "error", text: `Robot contacts the opposing Alliance Goal (${g.id}) at ${f.t.toFixed(1)} s (SG9)`, step: f.step }); break; }
         }
       }
@@ -238,26 +268,50 @@ export function overrideChecks({ routine, cfg, recording, world }: { routine: im
   return out;
 }
 
+
+const MID_EDGE = 0.4; // tape half-width: the Midfield is bounded by the tape's inner edge
 const polys: FieldPoly[] = [
-  { verts: MID, label: "Midfield", fill: "#ffffff14", stroke: "#f5f5f5" },
-  ...loaderDefs.map((l) => {
-    const red = l.id.includes("red");
-    const inner = red ? -(HALF - 24) : HALF - 24;
-    return { verts: [{ x: red ? -HALF : HALF, y: l.y - 14 }, { x: inner, y: l.y - 14 }, { x: inner, y: l.y + 14 }, { x: red ? -HALF : HALF, y: l.y + 14 }], label: "Load Zone", fill: red ? "#e5484d14" : "#3e8bff14", stroke: red ? "#e5484d" : "#3e8bff" } as FieldPoly;
+  { verts: MID.map((v) => ({ x: v.x * (1 - MID_EDGE / MIDFIELD_HALF_DIAGONAL), y: v.y * (1 - MID_EDGE / MIDFIELD_HALF_DIAGONAL) })), label: "Midfield", fill: "#00000000", stroke: "#c1c8e2", strokeWidth: 0.8 },
+  // Load Zones: corner rectangles bounded by the perimeter and a 3-sided tape line
+  ...[[-1, 1], [-1, -1], [1, 1], [1, -1]].map(([sx, sy]) => {
+    const red = sx < 0, edge = HALF - LOAD_ZONE.depth;
+    return {
+      verts: [{ x: sx * HALF, y: sy * edge }, { x: sx * LOAD_ZONE.inner, y: sy * edge }, { x: sx * LOAD_ZONE.inner, y: sy * HALF }],
+      closed: false, label: "Load Zone", fill: "#00000000", stroke: red ? "#c0273b" : "#2b85b3", strokeWidth: 0.9,
+    } as FieldPoly;
   }),
 ];
+
+const TAPE = "#c1c8e2";
+/** The Autonomous Line: a pair of tapes 1.8" apart running corner to Midfield along y = -x, plus the single Quadrant line along y = x */
+const lines: FieldLine[] = [];
+{
+  const start = LOAD_ZONE.inner - 0.4; // the tapes begin at the inner edge of the Load Zone tape
+  const gap = 0.9 * Math.SQRT2; // the pair sits 0.9" either side of y = -x, i.e. y = -x +- 1.27
+  // NW band (x < 0) and SE band (x > 0), each ending on the Midfield tape (y = x + 24 / y = x - 24)
+  for (const c of [gap, -gap]) {
+    const xe = (c - MIDFIELD_HALF_DIAGONAL) / 2; // -x + c = x + 24  ->  x = (c - 24) / 2
+    lines.push({ x1: -start, y1: start + c, x2: xe, y2: -xe + c, color: TAPE, width: 0.8 });
+    const xs = (c + MIDFIELD_HALF_DIAGONAL) / 2; // -x + c = x - 24 -> x = (c + 24) / 2
+    lines.push({ x1: start, y1: -start + c, x2: xs, y2: -xs + c, color: TAPE, width: 0.8 });
+  }
+  // the single Quadrant line along y = x, corner to Midfield (it meets the diamond at 12,12)
+  const m = MIDFIELD_HALF_DIAGONAL / 2;
+  lines.push({ x1: -start, y1: -start, x2: -m, y2: -m, color: TAPE, width: 0.6 }, { x1: start, y1: start, x2: m, y2: m, color: TAPE, width: 0.6 });
+}
 
 export const override: GameModule = {
   id: "override",
   name: "Override",
   season: "2026-27",
-  manualVersion: "2.0 (text read; Appendix A drawings and Figure FO-2 are images, not read)",
+  manualVersion: "2.0 (text) + official top-down field graphic",
   fieldSize: { value: 144, verified: true, source: "Game Manual v2.0: 12' x 12' Field, 6x6 tile floor" },
   autonSeconds: { value: 15, verified: true, source: "Game Manual v2.0, Primer" },
   driverSeconds: { value: 105, verified: true, source: "Game Manual v2.0, Primer (1:45)" },
   robotRules: { totalCapW: 88, drivetrainCapW: 55, verified: true },
   startingSize: { value: 18, verified: true, source: "Game Manual v2.0 <SG1a>: 18\" x 18\" x 18\"" },
-  layoutApproximate: true,
+  layoutApproximate: false,
+  mirror: "rotate", // red and blue Goals swap under a 180-degree turn, not a left-right flip
   zones: [],
   starts: [
     // one Robot per Quadrant (SG1d); red starts in the W and S Quadrants, blue in N and E (their Alliance Goals are there)
@@ -266,10 +320,7 @@ export const override: GameModule = {
     { label: "Blue · North quadrant", x: 38, y: HALF - 7.5, heading: 180, alliance: "blue" },
     { label: "Blue · East quadrant", x: HALF - 7.5, y: -38, heading: 270, alliance: "blue" },
   ],
-  lines: [
-    { x1: -HALF, y1: HALF, x2: HALF, y2: -HALF, color: "#f5f5f5" }, // Autonomous Line (y = -x)
-    { x1: -HALF, y1: -HALF, x2: HALF, y2: HALF, color: "#f5f5f588" }, // Quadrant boundary (y = x)
-  ],
+  lines,
   polys,
   objects,
   obstacles,
@@ -280,19 +331,17 @@ export const override: GameModule = {
   score: overrideScore,
   check: overrideChecks,
   notes: [
+    "Layout taken from VEX's official top-down Override field graphic: 36 Cups and 37 Pins (Match Loads excluded) - 24 gray-up Cups in eight touching triples along the perimeter (a yellow Pin stands in each middle Cup), four clear-up Cups on the Autonomous Line each ringed by four lying Pins, four yellow Pin-and-Cup stacks on the Quadrant diagonal, four red/blue Pin-and-Cup stacks on the Midfield corners, and one yellow Pin already Placed in each of the five neutral Goals.",
     "Motor rules verified in the manual: 88 W total on the whole Robot (R10a) and 55 W for the drivetrain motors (R11a); drivetrain motors may not power other mechanisms (R11b). Starting size 18\" cube (SG1a), 24\" x 24\" limit during the Match (SG2), 50\" height (SG3).",
-    "Read from the manual (v2.0): scoring rules SC1-SC8 (Pins nest into Goals and Cups; each visible Pin half scores 5, yellow halves 10 when Owned via the Toggle or Midfield; Robot in the Midfield 8; Autonomous Bonus 12; Autonomous Win Point), starting rules SG1-SG13, and element dimensions (Cup 3.15\" x 6.5\", Pin 1.6\" x 6.5\", Goal heights 8.7/5.8/3.25\", Toggle 25.8\").",
-    "Goals, Toggles and Loaders are solid: Robots and objects collide with the octagonal Goals, Toggle bars and Loader boxes. Place a held object with the Place action (in front of a Goal) and flip a Toggle with the Toggle action (in front of a wall Toggle).",
-    "NOT verified: the exact starting positions of every Pin and Cup (Figure FO-2 is an image) - this is a community reconstruction that matches the manual's counts (37 Pins + 36 Cups on the Field, Match Loads excluded). Nested Pin-in-Cup starting stacks are modelled side by side.",
+    "Read from the manual (v2.0): scoring rules SC1-SC8 (Pins nest into Goals and Cups; each visible Pin half scores 5, yellow halves 10 when Owned via the Toggle or Midfield; Robot in the Midfield 8; Autonomous Bonus 12; Autonomous Win Point), starting rules SG1-SG13, and element dimensions.",
+    "Goals and Loaders are solid; Toggles ride on top of the Field Perimeter. Lying Pins collide along their full 6.5\" length. A Cup with a Pin standing in it is picked up together (the intake needs room for both). Place a held object with the Place action (in front of a Goal); flip a Toggle with the Toggle action (front of the robot against that wall).",
     "Match Loads (introduced through Loaders in the Driver Period) are not simulated; Loaders are obstacles only.",
   ],
   provenance: [
     { item: "Field, tiles, periods, Cup/Pin/Goal-height/Toggle dimensions, scoring and starting rules", source: "Game Manual v2.0 text", confidence: "manual" },
-    { item: "Goal, Toggle and Loader positions on the 24\" grid", source: "three community projects derived from VEX's official VR field data", confidence: "community" },
-    { item: "Goal footprint 5.61\" across flats", source: "community mesh generator citing Appendix A", confidence: "community" },
-    { item: "Midfield diamond (half-diagonal 24\") and Autonomous Line along y = -x", source: "community + manual quadrant/side definitions; sources disagree on Midfield size", confidence: "community" },
-    { item: "Starting positions of Pins and Cups", source: "community reconstruction of Figure FO-2", confidence: "community" },
-    { item: "Loader footprint, Load Zone size, Pin physics radius", source: "assumed", confidence: "assumed" },
+    { item: "Positions, shapes and colors of Goals, Cups, Pins, Loaders, Toggles, Load Zones, Autonomous Line and Midfield", source: "VEX official top-down Override field graphic, measured in pixels (accuracy about 0.2\")", confidence: "community" },
+    { item: "Goals sit on the 24\" grid; footprint is a 5.6\" square with 0.95\" chamfers", source: "graphic + community mesh data citing Appendix A", confidence: "community" },
+    { item: "Pin physics (1.0\" radius, 4.4\" collision spine when lying) and mass; Loader collision box", source: "assumed from the graphic's silhouettes", confidence: "assumed" },
   ],
 };
 
