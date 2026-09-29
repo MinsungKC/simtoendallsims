@@ -44,6 +44,9 @@ describe("game modules", () => {
     const w = createWorld(worldInit(blank), { x: 0, y: 0, heading: 0 });
     expect(blank.score(w)).toEqual({ red: 0, blue: 0, lines: [] });
   });
+  it("older seasons are registered as stubs", () => {
+    for (const id of ["over-under", "spin-up", "tipping-point"]) expect(games.some((g) => g.id === id)).toBe(true);
+  });
   it("unverified games are flagged as approximate", () => {
     for (const g of [override, pushBack, highStakes]) expect(g.layoutApproximate).toBe(true);
   });

@@ -1,126 +1,138 @@
-import { useCallback, useState } from "react";
-import { motorBudget } from "../core/motors";
-import { derive, type RobotConfig, type WheelType } from "../core/robot";
-import type { SimState } from "../core/physics";
+import { useEffect, useRef } from "react";
+import { FieldCanvas } from "./FieldCanvas";
+import { RobotPanel } from "./RobotPanel";
+import { RoutinePanel } from "./RoutinePanel";
+import { CodePanel } from "./CodePanel";
+import { FieldPanel } from "./FieldPanel";
+import { Timeline } from "./Timeline";
+import { Badge } from "./atoms";
+import { download, scoreFor } from "./helpers";
 import { games } from "../games";
-import { FieldView } from "./FieldView";
-import { useStore } from "./store";
+import { useEditor, useStore, type ProjectFile, type Tab } from "./store";
 
-function Num({ label, value, onChange, step = 1, min = 0 }: { label: string; value: number; onChange: (v: number) => void; step?: number; min?: number }) {
-  return (
-    <label className="row">
-      <span>{label}</span>
-      <input type="number" value={value} step={step} min={min} onChange={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) onChange(v); }} />
-    </label>
-  );
-}
+const TABS: { id: Tab; label: string }[] = [
+  { id: "routine", label: "Routine" },
+  { id: "robot", label: "Robot" },
+  { id: "code", label: "Code" },
+  { id: "field", label: "Field" },
+];
+
+try {
+  const saved = localStorage.getItem("simtoendallsims:theme");
+  if (saved) document.documentElement.dataset.theme = saved;
+} catch { /* storage unavailable */ }
 
 export function App() {
-  const { robot, game, setRobot, setGame } = useStore();
-  const [tel, setTel] = useState<SimState | null>(null);
-  const onTel = useCallback((s: SimState) => setTel({ ...s }), []);
-  const d = derive(robot);
-  const budget = motorBudget({ count: robot.motorsPerSide * 2, watts: robot.motorWatts }, 0, game.robotRules);
+  const st = useEditor();
+  const playing = useStore((s) => s.playing);
+  const { tab, setTab, recording, routine, robot } = st;
+  const game = st.game();
+  const fileRef = useRef<HTMLInputElement>(null);
 
-  const setWheelType = (i: number, type: WheelType) =>
-    setRobot({ wheels: robot.wheels.map((w, j) => (j === i ? { ...w, type } : w)) });
-  const setWheelCount = (n: number) => {
-    const xs = n === 2 ? [4, -4] : n === 3 ? [5, 0, -5] : [7, 3.5, 0, -3.5, -7].slice(0, n);
-    setRobot({ wheels: xs.map((x, i) => ({ x, type: robot.wheels[i]?.type ?? "omni" })) });
+  // playback loop
+  useEffect(() => {
+    if (!playing) return;
+    let raf = 0;
+    let last = performance.now();
+    const tick = (now: number) => {
+      const s = useStore.getState();
+      const dt = ((now - last) / 1000) * s.speed;
+      last = now;
+      const dur = s.recording?.duration ?? 0;
+      const t = s.time + dt;
+      if (t >= dur) { s.setTime(dur); s.setPlaying(false); return; }
+      s.setTime(t);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [playing]);
+
+  // keyboard shortcuts
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement;
+      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) return;
+      const s = useStore.getState();
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? s.redo() : s.undo(); }
+      else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") { e.preventDefault(); s.redo(); }
+      else if ((e.key === "Delete" || e.key === "Backspace") && s.selected) { e.preventDefault(); s.removeStep(s.selected); }
+      else if (e.key === " ") { e.preventDefault(); s.setPlaying(!s.playing); }
+      else if (e.key === "Escape") { s.select(null); s.setTool("select"); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const score = recording ? scoreFor(game, st.customField, recording.world) : null;
+  const warnings = recording?.warnings ?? [];
+  const autonLimit = game.autonSeconds.value;
+  const over = recording && recording.duration > autonLimit;
+
+  const save = () => {
+    const p: ProjectFile = { app: "simtoendallsims", version: 1, robot, ports: st.ports, routine, gameId: st.gameId, customField: st.customField, target: st.target, simOpts: st.simOpts };
+    download(`${routine.name.replace(/\W+/g, "_") || "auton"}.simproject.json`, JSON.stringify(p, null, 1), "application/json");
   };
-  const num = <K extends keyof RobotConfig>(k: K) => (v: number) => setRobot({ [k]: v } as Partial<RobotConfig>);
+  const load = async (file: File) => {
+    try {
+      const p = JSON.parse(await file.text()) as ProjectFile;
+      if (p.app !== "simtoendallsims") throw new Error("not a SimToEndAllSims project");
+      st.loadProject(p);
+    } catch (e) {
+      alert(`Could not open project: ${String(e)}`);
+    }
+  };
 
   return (
     <div className="app">
-      <aside className="panel">
+      <header className="topbar">
         <h1>SimToEndAllSims</h1>
-        <label className="row">
-          <span>Game</span>
-          <select value={game.id} onChange={(e) => setGame(e.target.value)}>
-            {games.map((g) => <option key={g.id} value={g.id}>{g.name} {g.season !== "-" ? `(${g.season})` : ""}</option>)}
-          </select>
-        </label>
-        {game.notes.map((n, i) => <p key={i} className="note">{n}</p>)}
-
-        <h2>Drivetrain</h2>
-        <label className="row">
-          <span>Motors / side</span>
-          <select value={robot.motorsPerSide} onChange={(e) => setRobot({ motorsPerSide: +e.target.value })}>
-            {[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n} ({n * 2} total)</option>)}
-          </select>
-        </label>
-        <label className="row">
-          <span>Motor</span>
-          <select value={robot.motorWatts} onChange={(e) => setRobot({ motorWatts: +e.target.value as 11 | 5.5 })}>
-            <option value={11}>11 W</option><option value={5.5}>5.5 W</option>
-          </select>
-        </label>
-        <label className="row">
-          <span>Cartridge</span>
-          <select value={robot.cartridge} onChange={(e) => setRobot({ cartridge: +e.target.value as 100 | 200 | 600 })}>
-            <option value={100}>100 rpm (red)</option><option value={200}>200 rpm (green)</option><option value={600}>600 rpm (blue)</option>
-          </select>
-        </label>
-        <Num label="Driving teeth" value={robot.drivingTeeth} onChange={num("drivingTeeth")} min={1} />
-        <Num label="Driven teeth" value={robot.drivenTeeth} onChange={num("drivenTeeth")} min={1} />
-        <label className="row">
-          <span>Wheel size</span>
-          <select value={robot.wheelDiameter} onChange={(e) => setRobot({ wheelDiameter: +e.target.value })}>
-            <option value={2.75}>2.75"</option><option value={3.25}>3.25"</option><option value={4}>4"</option>
-          </select>
-        </label>
-        <label className="row">
-          <span>Wheels / side</span>
-          <select value={robot.wheels.length} onChange={(e) => setWheelCount(+e.target.value)}>
-            {[2, 3, 4, 5].map((n) => <option key={n} value={n}>{n}</option>)}
-          </select>
-        </label>
-        {robot.wheels.map((w, i) => (
-          <label className="row" key={i}>
-            <span>Wheel {i + 1} (x={w.x}")</span>
-            <select value={w.type} onChange={(e) => setWheelType(i, e.target.value as WheelType)}>
-              <option value="omni">omni</option><option value="traction">traction</option>
-            </select>
-          </label>
-        ))}
-
-        <h2>Body</h2>
-        <Num label="Track width (in)" value={robot.trackWidth} onChange={num("trackWidth")} step={0.25} min={1} />
-        <Num label="Length (in)" value={robot.length} onChange={num("length")} step={0.5} min={1} />
-        <Num label="Width (in)" value={robot.width} onChange={num("width")} step={0.5} min={1} />
-        <Num label="Mass (kg)" value={robot.mass} onChange={num("mass")} step={0.1} min={0.5} />
-
-        <h2>Motor budget</h2>
-        <p className={budget.legal ? "ok" : "bad"}>
-          Drivetrain {budget.drivetrainW} W{game.robotRules.drivetrainCapW !== null ? ` / ${game.robotRules.drivetrainCapW} W` : ""} · total cap {game.robotRules.totalCapW} W
-          {!game.robotRules.verified && " (caps UNVERIFIED)"}
-        </p>
-        {budget.problems.map((p) => <p key={p} className="bad">{p}</p>)}
-        {game.startingSize && (robot.length > game.startingSize.value || robot.width > game.startingSize.value) && (
-          <p className="bad">Exceeds {game.startingSize.value}" starting size{game.startingSize.verified ? "" : " (UNVERIFIED)"}</p>
-        )}
-      </aside>
-
-      <main className="main">
-        <FieldView onTelemetry={onTel} />
-      </main>
-
-      <aside className="panel telemetry">
-        <h2>Derived</h2>
-        <p>Free speed: {d.freeSpeed.toFixed(1)} in/s</p>
-        <p>Free turn rate: {d.freeTurnRate.toFixed(0)} °/s</p>
-        <p>Inertia: {d.inertia.toFixed(4)} kg·m²</p>
-        <h2>Live</h2>
-        {tel && (
+        <select value={game.id} onChange={(e) => st.setGame(e.target.value)} title="Game">
+          {games.map((g) => <option key={g.id} value={g.id}>{g.name}{g.season !== "-" ? ` · ${g.season}` : ""}</option>)}
+        </select>
+        {game.layoutApproximate && <Badge kind="warn">approx. layout</Badge>}
+        <span className="grow" />
+        {recording && (
           <>
-            <p>x {tel.x.toFixed(1)} in · y {tel.y.toFixed(1)} in</p>
-            <p>heading {(((tel.heading % 360) + 360) % 360).toFixed(1)}°</p>
-            <p>v {tel.vx.toFixed(1)} in/s · ω {tel.w.toFixed(0)} °/s</p>
-            <p>battery {tel.batteryV.toFixed(2)} V</p>
-            <p>t {tel.t.toFixed(2)} s</p>
+            <Badge kind={over ? "bad" : "ok"}>{recording.duration.toFixed(1)} s / {autonLimit} s</Badge>
+            {score && <Badge kind="info">score R {score.red} · B {score.blue}</Badge>}
+            <Badge kind={warnings.length ? "warn" : "ok"}>{warnings.length} warning{warnings.length === 1 ? "" : "s"}</Badge>
           </>
         )}
+        <button onClick={() => { const cur = document.documentElement.dataset.theme; const dark = cur ? cur === "dark" : matchMedia("(prefers-color-scheme: dark)").matches; const next = dark ? "light" : "dark"; document.documentElement.dataset.theme = next; try { localStorage.setItem("simtoendallsims:theme", next); } catch { /* ignore */ } }} title="Toggle light/dark">◐</button>
+        <button onClick={st.undo} disabled={!st.past.length} title="Undo (Ctrl+Z)">↶</button>
+        <button onClick={st.redo} disabled={!st.future.length} title="Redo (Ctrl+Shift+Z)">↷</button>
+        <button onClick={save}>Save</button>
+        <button onClick={() => fileRef.current?.click()}>Open</button>
+        <input ref={fileRef} type="file" accept=".json,application/json" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) void load(f); e.target.value = ""; }} />
+      </header>
+
+      <aside className="side">
+        <nav className="tabs">
+          {TABS.map((t) => <button key={t.id} className={tab === t.id ? "active" : ""} onClick={() => setTab(t.id)}>{t.label}</button>)}
+        </nav>
+        {tab === "routine" && <RoutinePanel />}
+        {tab === "robot" && <RobotPanel />}
+        {tab === "code" && <CodePanel />}
+        {tab === "field" && <FieldPanel />}
       </aside>
+
+      <main className="center">
+        <FieldCanvas />
+        <div className="legend">
+          <span><i style={{ background: "#f0b34a" }} /> true path</span>
+          <span><i style={{ background: "#ff6ba8" }} /> odometry estimate (dashed robot = where the robot thinks it is)</span>
+          <span><i style={{ background: "#8b96b3" }} /> planned route</span>
+          <span>sim {st.simMs.toFixed(0)} ms</span>
+        </div>
+        {warnings.length > 0 && (
+          <ul className="warnings">
+            {warnings.slice(0, 6).map((w, i) => <li key={i} onClick={() => w.step >= 0 && routine.steps[w.step] && st.select(routine.steps[w.step].id)}>⚠ {w.step >= 0 ? `Step ${w.step + 1}: ` : ""}{w.text}</li>)}
+            {warnings.length > 6 && <li>… and {warnings.length - 6} more</li>}
+          </ul>
+        )}
+        <Timeline />
+      </main>
     </div>
   );
 }

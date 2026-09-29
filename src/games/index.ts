@@ -14,7 +14,7 @@ const inZone = (z: ScoringZone, o: GameObject): boolean =>
     : Math.hypot(o.x - z.geom.x, o.y - z.geom.y) <= z.geom.r;
 
 /** Points for objects resting in zones, split by object team. */
-function zoneScore(world: World, zones: ScoringZone[], colorOfNeutral?: (z: ScoringZone) => "red" | "blue" | null): ScoreResult {
+export function zoneScore(world: World, zones: ScoringZone[], colorOfNeutral?: (z: ScoringZone) => "red" | "blue" | null): ScoreResult {
   const lines: ScoreResult["lines"] = [];
   let red = 0, blue = 0;
   for (const z of zones) {
@@ -210,7 +210,26 @@ export const override: GameModule = {
   ],
 };
 
-export const games: GameModule[] = [override, pushBack, highStakes, blank];
+/** Older seasons: field size and periods only. Objects/scoring are not modelled (use the blank-field tools). */
+function stub(id: string, name: string, season: string, note: string): GameModule {
+  return {
+    ...blank,
+    id,
+    name,
+    season,
+    fieldSize: { value: 144, verified: false, source: "12'x12' V5RC field" },
+    autonSeconds: U(15),
+    driverSeconds: U(105),
+    layoutApproximate: false,
+    notes: [`${note} Field size and periods are from general knowledge and are UNVERIFIED; no game objects or scoring are modelled - use Edit field / custom JSON to add your own.`],
+  };
+}
+
+export const overUnder = stub("over-under", "Over Under", "2023-24", "Stub for the 2023-24 season.");
+export const spinUp = stub("spin-up", "Spin Up", "2022-23", "Stub for the 2022-23 season.");
+export const tippingPoint = stub("tipping-point", "Tipping Point", "2021-22", "Stub for the 2021-22 season.");
+
+export const games: GameModule[] = [override, pushBack, highStakes, overUnder, spinUp, tippingPoint, blank];
 
 export function startsFor(g: GameModule, alliance: "red" | "blue"): StartPosition[] {
   return g.starts.filter((s) => s.alliance === alliance);
