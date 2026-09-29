@@ -1,28 +1,20 @@
-# SimToEndAllSims - plan
+# SimToEndAllSims - status
 
-Browser-based, physics-driven VEX V5RC auton simulator and code generator.
-Pure-TS core (`src/core`, `src/games`) has no UI dependency; UI is React + canvas (`src/ui`).
+Browser-based, physics-driven VEX V5RC auton simulator and code generator. Pure-TS core (`src/core`, `src/games`,
+`src/codegen`) has no UI dependency; UI is React + canvas (`src/ui`).
 
-Conventions: field inches, origin at field center, x right, y up, heading in degrees with
-0 = +y and clockwise positive (matches LemLib's convention, which keeps codegen simple).
+## Done
+- [x] **Physics v2**: motor/battery model, wheel slip, lateral drift, scrub, impulse contacts, pushable objects, intake/clamp
+- [x] **Sensors/odometry**: IMU, IME quantization, tracking wheels; port of LemLib's estimator
+- [x] **Controllers**: port of LemLib v0.5 motions; 10 ms loop, 1-tick command latency
+- [x] **Routine model + runtime**: steps, triggers (start/distance/delay/end), warnings, placement-error option, mirroring
+- [x] **Auto-tune** (Web Worker) from the physics model
+- [x] **Editor UI**: field canvas with draggable handles, add-step tools, undo/redo, timeline + charts, robot/routine/code/field panels
+- [x] **Games**: Override (approx.), Push Back (approx.), High Stakes (approx.), Over Under/Spin Up/Tipping Point stubs, blank
+- [x] **Code generators**: LemLib, EZ-Template, JAR-Template, generic PROS - compile/type/behavior checked (see ADDING_A_TEMPLATE.md)
 
-## Milestones
-- [x] **M1** Field + robot config (incl. 88 W motor budget) + tank physics, keyboard-driven test drive
-  - Drive motor count 2-8, 11 W / 5.5 W, cartridges, gearing, wheels omni/traction per position
-  - DC-motor model with back-EMF, battery sag, traction limit, omni/traction lateral scrub, wall collision
-  - Game module schema with `verified` flags; Override / Push Back / blank stubs
-- [ ] **M2** Path editor (Bezier / boomerang / pure pursuit / turn+drive primitives), motion profiling, follower controllers driving the sim, path.jerryio import/export
-- [ ] **M3** Actions timeline (intake, clamp, lift, wait, parallel, custom code)
-- [ ] **M4** Full game modules (Override, Push Back) with Planck.js objects/scoring; then High Stakes
-- [ ] **M5** Codegen: LemLib + generic PID/odom
-- [ ] **M6** EZ-Template 3.2.x (4.0 beta separately), JAR-Template, PROS/VEXcode; older-game stubs
-- [ ] **M7** Polish, docs, ADDING_A_GAME / ADDING_A_TEMPLATE
-
-## Open questions / needs verification
-See `SOURCES.md`. Biggest: Override manual geometry and the 55 W drivetrain sub-cap (R11a);
-JAR-Template current API; 5.5 W motor curve and V5 motor stall current; tire friction values.
-
-## Known M1 simplifications
-- Tank only; wall collision is corner-based and only zeroes forward speed (no spin from impacts)
-- Field obstacles/objects arrive in M4 (Planck.js)
-- No odometry noise yet (M2)
+## Known gaps / next
+- Tank drive only (no X/H/mecanum/swerve); no weight transfer or motor thermal model
+- Game layouts and scoring are approximate until the official manuals can be read (drop the Override PDF in the repo)
+- Simulated controller is LemLib-class for every target
+- vexide (Rust) target; per-game auton-scoring bonuses (win points, control zones)

@@ -54,6 +54,9 @@ export interface RunOptions {
   maxTime?: number;
   /** Pneumatic actuation delay, s */
   clampDelay?: number;
+  /** Controller ticks (10 ms each) between computing a motor command and the motors applying it. Real PROS
+   *  commands reach the motors on the next update, so 1 is realistic; 0 gives an unrealistically ideal plant. */
+  latencyTicks?: number;
 }
 
 interface PendingAction { a: ActionSpec; fireAt: number }
@@ -63,6 +66,15 @@ export function simulate(routine: Routine, cfg: RobotConfig, init: WorldInit, op
   const d = derive(cfg);
   const pe = opts.placementError ?? { x: 0, y: 0, heading: 0 };
   const world = createWorld(init, { x: routine.start.x + pe.x, y: routine.start.y + pe.y, heading: routine.start.heading + pe.heading });
+  const grip = cfg.grip ?? 1;
+  world.env = {
+    ...world.env,
+    driveEfficiency: cfg.efficiency ?? world.env.driveEfficiency,
+    friction: {
+      traction: { long: world.env.friction.traction.long * grip, lat: world.env.friction.traction.lat * grip },
+      omni: { long: world.env.friction.omni.long * grip, lat: world.env.friction.omni.lat * grip },
+    },
+  };
   const sensors = new SensorSuite(cfg, opts.seed ?? 1, { heading: world.robot.heading });
   const odom = new LemLibOdom(cfg, sensors);
   odom.setPose(routine.start.x, routine.start.y, routine.start.heading, world.robot);
@@ -78,6 +90,14 @@ export function simulate(routine: Routine, cfg: RobotConfig, init: WorldInit, op
   let simStep = 0;
   let cmdL = 0, cmdR = 0;
   let holdL = false, holdR = false;
+  const latency = Math.max(0, Math.round(opts.latencyTicks ?? 1));
+  const queue: { l: number; r: number; hl: boolean; hr: boolean }[] = [];
+  const applyCommand = (l: number, r: number, hl: boolean, hr: boolean) => {
+    queue.push({ l, r, hl, hr });
+    while (queue.length > latency + 1) queue.shift();
+    const c = queue.length > latency ? queue[queue.length - 1 - latency] : { l: 0, r: 0, hl: false, hr: false };
+    cmdL = c.l; cmdR = c.r; holdL = c.hl; holdR = c.hr;
+  };
   let nowMs = 0;
   let stepIdx = -1;
   let pending: PendingAction[] = [];
@@ -146,11 +166,10 @@ export function simulate(routine: Routine, cfg: RobotConfig, init: WorldInit, op
       const pose: Pose = odom.getPose();
       if (motion) {
         const out = motion.tick(pose, nowMs);
-        cmdL = out.left; cmdR = out.right;
-        holdL = !!out.holdLeft; holdR = !!out.holdRight;
+        applyCommand(out.left, out.right, !!out.holdLeft, !!out.holdRight);
         done = out.done;
       } else {
-        cmdL = 0; cmdR = 0; holdL = false; holdR = false;
+        applyCommand(0, 0, false, false);
         done = nowMs - startMs >= waitMs;
       }
       while (qi < queue.length) {
@@ -161,7 +180,8 @@ export function simulate(routine: Routine, cfg: RobotConfig, init: WorldInit, op
       }
       advance(); advance();
     }
-    cmdL = 0; cmdR = 0; holdL = false; holdR = false;
+    applyCommand(0, 0, false, false);
+    if (latency === 0) { cmdL = 0; cmdR = 0; holdL = false; holdR = false; }
     // any triggers that never fired still run at the end (matching generated code, which emits them
     // after waitUntilDone if distance was never reached would hang -> flag it)
     while (qi < queue.length) {

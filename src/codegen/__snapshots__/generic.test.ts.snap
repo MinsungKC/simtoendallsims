@@ -505,7 +505,7 @@ void run_auton() {
     // 2. Drive to (-48, -30)
     intake.move(127);
     pros::Task step2_actions([]() {
-        pros::delay(630); // ~when the simulated robot had traveled 20 (re-time on robot)
+        pros::delay(900); // ~when the simulated robot had traveled 20 (re-time on robot)
         clamp_piston.set_value(true);
     });
     gen::move_to_point(-48, -30, 2500, {.maxSpeed = 100});

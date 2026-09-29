@@ -22,12 +22,22 @@ export function RobotPanel() {
   const setWheel = (i: number, patch: Partial<{ type: WheelType; x: number }>) => setRobot({ wheels: robot.wheels.map((w, j) => (j === i ? { ...w, ...patch } : w)) });
 
   const tune = () => {
-    setTuning("Tuning… (simulating ~150 test motions)");
-    setTimeout(() => {
-      const r = autoTune(robot);
+    setTuning("Tuning… 0%");
+    const done = (r: ReturnType<typeof autoTune>) => {
       setRobot({ lateral: r.lateral, angular: r.angular, horizontalDrift: r.horizontalDrift });
       setTuning(`Done. Test-motion cost ${r.score.before.toFixed(2)} → ${r.score.after.toFixed(2)} (lower is better). Lateral kP ${r.lateral.kP}, kD ${r.lateral.kD}; angular kP ${r.angular.kP}, kD ${r.angular.kD}. These are starting points for the real robot.`);
-    }, 30);
+    };
+    try {
+      const w = new Worker(new URL("../core/tuneWorker.ts", import.meta.url), { type: "module" });
+      w.onmessage = (e: MessageEvent<{ progress?: number; result?: ReturnType<typeof autoTune> }>) => {
+        if (e.data.progress !== undefined) setTuning(`Tuning… ${Math.round(e.data.progress * 100)}%`);
+        if (e.data.result) { done(e.data.result); w.terminate(); }
+      };
+      w.onerror = () => { w.terminate(); setTimeout(() => done(autoTune(robot)), 20); };
+      w.postMessage({ cfg: robot });
+    } catch {
+      setTimeout(() => done(autoTune(robot)), 20); // no worker support: run inline
+    }
   };
 
   return (
@@ -42,6 +52,7 @@ export function RobotPanel() {
       <Section title="Drivetrain motors" right={<Badge kind={budget.legal ? "ok" : "bad"}>{budget.drivetrainW} W drive · {budget.totalW} W total</Badge>}>
         <Sel label="Motors per side" value={robot.motorsPerSide} options={[1, 2, 3, 4].map((n) => ({ value: n, label: `${n} (${n * 2} total)` }))} onChange={set("motorsPerSide")} />
         <Sel label="Motor" value={robot.motorWatts} options={[{ value: 11, label: "11 W" }, { value: 5.5, label: "5.5 W" }]} onChange={set("motorWatts")} />
+        <p className="note">Tank-style drive (left/right sides). X-drive, H-drive, mecanum and swerve are not modelled yet.</p>
         <Sel label="Cartridge" value={robot.cartridge} options={[{ value: 100, label: "100 rpm (red)" }, { value: 200, label: "200 rpm (green)" }, { value: 600, label: "600 rpm (blue)" }]} onChange={set("cartridge")} />
         <Num label="Other motors" value={robot.otherMotorsW} onChange={set("otherMotorsW")} unit="W" min={0} hint="Intake, lift, etc. Counts against the total power cap." />
         <p className="note">
@@ -76,6 +87,12 @@ export function RobotPanel() {
         <Sel label="Brake mode" value={robot.brake} options={[{ value: "coast", label: "coast" }, { value: "brake", label: "brake" }, { value: "hold", label: "hold" }]} onChange={set("brake")} />
         <p className="note">Yaw inertia {d.inertia.toFixed(4)} kg·m² (uniform box). Free speed {d.freeSpeed.toFixed(0)} in/s; loaded top speed is ~10% lower.</p>
         {game.startingSize && (robot.length > game.startingSize.value || robot.width > game.startingSize.value) && <p className="bad">Exceeds the {game.startingSize.value}" starting size{game.startingSize.verified ? "" : " (UNVERIFIED)"}.</p>}
+      </Section>
+
+      <Section title="Calibration" open={false}>
+        <p className="note">Measure your real robot (top speed, time to reach it, whether wheels slip) and adjust these until the simulator matches.</p>
+        <Num label="Floor grip ×" value={robot.grip} onChange={set("grip")} step={0.05} min={0.3} max={1.6} hint="Scales all tire friction. 1.0 assumes ~1.0 for traction wheels and ~0.75 for omnis on foam tiles." />
+        <Num label="Drive efficiency" value={robot.efficiency} onChange={set("efficiency")} step={0.01} min={0.5} max={1} hint="Gearbox/chain losses. Real drivetrains reach roughly 85-95% of free speed." />
       </Section>
 
       <Section title="Mechanisms">

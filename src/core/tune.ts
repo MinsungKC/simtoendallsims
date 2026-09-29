@@ -17,79 +17,101 @@ export function suggestHorizontalDrift(cfg: RobotConfig): number {
   return Math.round((2 + 6 * traction) * 10) / 10;
 }
 
-interface Trial { settle: number; err: number; overshoot: number; timedOut: boolean; slipped: boolean }
+interface Trial { settle: number; err: number; overshoot: number; timedOut: boolean }
+
+/** Time (s from start) after which |error| stays below tol, judged on the TRUE state, not the controller's exit timers. */
+function settleTime(values: number[], times: number[], tol: number): number {
+  let last = 0;
+  for (let i = 0; i < values.length; i++) if (Math.abs(values[i]) > tol) last = times[i] - times[0];
+  return last;
+}
 
 function lateralTrial(cfg: RobotConfig, dist: number): Trial {
   const rec = runSingleMotion(cfg, { ...defaultMotion("moveToPoint", { x: 0, y: dist, heading: 0 }), timeout: 4000 } as never);
+  const fr = rec.frames.filter((f) => f.step === 0);
+  const err = fr.map((f) => Math.hypot(f.x, f.y - dist));
   const f = rec.frames[rec.frames.length - 1];
-  let maxY = 0;
-  for (const fr of rec.frames) maxY = Math.max(maxY, fr.y);
-  const t = rec.steps[0];
   return {
-    settle: t.end - t.start,
+    settle: settleTime(err, fr.map((x) => x.t), 1.0),
     err: Math.hypot(f.x, f.y - dist),
-    overshoot: Math.max(0, maxY - dist),
-    timedOut: t.timedOut,
-    slipped: rec.frames.some((fr) => fr.slip),
+    overshoot: Math.max(0, ...rec.frames.map((x) => x.y - dist)),
+    timedOut: rec.steps[0].timedOut,
   };
 }
 
 function angularTrial(cfg: RobotConfig, deg: number): Trial {
   const rec = runSingleMotion(cfg, { ...defaultMotion("turnToHeading", { x: 0, y: 0, heading: deg }), timeout: 3000 } as never);
+  const fr = rec.frames.filter((f) => f.step === 0);
+  const err = fr.map((f) => f.heading - deg);
   const f = rec.frames[rec.frames.length - 1];
-  let maxH = 0;
-  for (const fr of rec.frames) maxH = Math.max(maxH, fr.heading);
-  const t = rec.steps[0];
   return {
-    settle: t.end - t.start,
+    settle: settleTime(err, fr.map((x) => x.t), 2.0),
     err: Math.abs(f.heading - deg),
-    overshoot: Math.max(0, maxH - deg),
-    timedOut: t.timedOut,
-    slipped: rec.frames.some((fr) => fr.slip),
+    overshoot: Math.max(0, ...rec.frames.map((x) => x.heading - deg)),
+    timedOut: rec.steps[0].timedOut,
   };
 }
 
-function cost(trials: Trial[], errWeight: number, overshootWeight: number): number {
-  let c = 0;
-  for (const t of trials) c += t.settle + errWeight * t.err + overshootWeight * t.overshoot + (t.timedOut ? 3 : 0);
-  return c / trials.length;
-}
+const cost = (trials: Trial[], overshootW: number, errW: number): number =>
+  trials.reduce((c, t) => c + t.settle + overshootW * t.overshoot + errW * t.err + (t.timedOut ? 2 : 0), 0) / trials.length;
+
+const r2 = (v: number) => Math.round(v * 100) / 100;
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 /**
- * Search PID gains against the physics model + LemLib controller port. The result is a STARTING POINT:
- * the real robot differs (battery, wear, floor, exact mass distribution) and needs on-robot tuning.
+ * Search PID gains against the physics model + LemLib controller port. Each candidate is scored on settling time,
+ * overshoot and final error over several moves, and additionally at +/-25% kP so the result isn't knife-edge.
+ * The result is a STARTING POINT: the real robot differs (battery, wear, floor, mass distribution).
  */
 export function autoTune(cfg: RobotConfig, onProgress?: (p: number) => void): TuneResult {
   const base: RobotConfig = { ...cfg, horizontalDrift: suggestHorizontalDrift(cfg) };
-  const evalLateral = (kP: number, kD: number) => {
+  const lat = (kP: number, kD: number) => {
     const c = { ...base, lateral: { ...base.lateral, kP, kD } };
-    return cost([lateralTrial(c, 24), lateralTrial(c, 48)], 1.0, 0.6);
+    return cost([lateralTrial(c, 24), lateralTrial(c, 48)], 0.8, 0.5);
   };
-  const evalAngular = (kP: number, kD: number) => {
+  const ang = (kP: number, kD: number) => {
     const c = { ...base, angular: { ...base.angular, kP, kD } };
-    return cost([angularTrial(c, 90), angularTrial(c, 180)], 0.15, 0.05);
+    return cost([angularTrial(c, 90), angularTrial(c, 180)], 0.08, 0.1);
   };
+  // score at the candidate and at +/-25% of each gain, so the winner is not knife-edge on a real robot;
+  // a tiny penalty on gain size prefers gentle controllers when scores tie
+  const robust = (f: (kP: number, kD: number) => number, pw: number, dw: number) => (kP: number, kD: number) =>
+    (f(kP, kD) * 2 + f(kP * 0.75, kD) + f(kP * 1.25, kD) + f(kP, kD * 0.75) + f(kP, kD * 1.25)) / 6 + pw * kP + dw * kD;
 
-  const before = { lateral: evalLateral(cfg.lateral.kP, cfg.lateral.kD), angular: evalAngular(cfg.angular.kP, cfg.angular.kD) };
+  const robustLat = robust(lat, 0.01, 0.01), robustAng = robust(ang, 0.04, 0.005);
+  const before = { lat: robustLat(cfg.lateral.kP, cfg.lateral.kD), ang: robustAng(cfg.angular.kP, cfg.angular.kD) };
 
   let progress = 0;
-  const total = 36 + 36;
-  const tick = () => onProgress?.(++progress / total);
+  const total = 2 * (25 + 24);
+  const tick = () => onProgress?.(Math.min(1, ++progress / total));
 
-  const latP = [4, 6, 8, 10, 14, 20];
-  const latD = [0, 2, 3, 5, 8, 12];
-  let bestLat = { kP: cfg.lateral.kP, kD: cfg.lateral.kD, c: Infinity };
-  for (const kP of latP) for (const kD of latD) { const c = evalLateral(kP, kD); tick(); if (c < bestLat.c) bestLat = { kP, kD, c }; }
+  const search = (
+    f: (kP: number, kD: number) => number,
+    kPs: number[], kDs: number[], range: { p: [number, number]; d: [number, number] },
+  ) => {
+    let best = { kP: kPs[0], kD: kDs[0], c: Infinity };
+    for (const kP of kPs) for (const kD of kDs) { const c = f(kP, kD); tick(); if (c < best.c) best = { kP, kD, c }; }
+    let scale = 0.4;
+    for (let round = 0; round < 3; round++) {
+      for (const fp of [1 - scale, 1, 1 + scale]) for (const fd of [1 - scale, 1, 1 + scale]) {
+        if (fp === 1 && fd === 1) continue;
+        const kP = r2(clamp(best.kP * fp, ...range.p));
+        const kD = r2(clamp(best.kD === 0 ? (fd > 1 ? 0.5 : 0) : best.kD * fd, ...range.d));
+        const c = f(kP, kD); tick();
+        if (c < best.c) best = { kP, kD, c };
+      }
+      scale /= 2;
+    }
+    return best;
+  };
 
-  const angP = [1, 1.5, 2, 3, 4, 6];
-  const angD = [4, 8, 10, 14, 20, 30];
-  let bestAng = { kP: cfg.angular.kP, kD: cfg.angular.kD, c: Infinity };
-  for (const kP of angP) for (const kD of angD) { const c = evalAngular(kP, kD); tick(); if (c < bestAng.c) bestAng = { kP, kD, c }; }
+  const bestLat = search(robustLat, [4, 7, 10, 14, 20], [0, 1.5, 3, 6, 10], { p: [2, 24], d: [0, 14] });
+  const bestAng = search(robustAng, [1, 1.6, 2.4, 3.6, 5], [3, 6, 10, 16, 24], { p: [0.5, 7], d: [1, 32] });
 
   return {
-    lateral: { ...base.lateral, kP: bestLat.kP, kD: bestLat.kD },
-    angular: { ...base.angular, kP: bestAng.kP, kD: bestAng.kD },
+    lateral: { ...base.lateral, kP: r2(bestLat.kP), kD: r2(bestLat.kD) },
+    angular: { ...base.angular, kP: r2(bestAng.kP), kD: r2(bestAng.kD) },
     horizontalDrift: base.horizontalDrift,
-    score: { before: before.lateral + before.angular, after: bestLat.c + bestAng.c },
+    score: { before: before.lat + before.ang, after: bestLat.c + bestAng.c },
   };
 }

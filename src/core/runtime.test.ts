@@ -105,6 +105,28 @@ describe("simulated motions", () => {
   });
 });
 
+describe("calibration knobs", () => {
+  const peak = (c: typeof cfg) => Math.max(...runSingleMotion(c, m("moveToPoint", { x: 0, y: 100, heading: 0 }), { x: 0, y: -60, heading: 0 }).frames.map((f) => f.vx));
+  it("lower drive efficiency lowers top speed", () => {
+    expect(peak({ ...cfg, efficiency: 0.6 })).toBeLessThan(peak({ ...cfg, efficiency: 0.95 }));
+  });
+  it("lower grip lowers acceleration on a torque-heavy robot", () => {
+    const strong = { ...cfg, motorsPerSide: 4, cartridge: 200 as const, drivingTeeth: 1, drivenTeeth: 1 };
+    const t90 = (grip: number) => {
+      const r = runSingleMotion({ ...strong, grip }, m("moveToPoint", { x: 0, y: 60, heading: 0 }), { x: 0, y: -60, heading: 0 });
+      const top = Math.max(...r.frames.map((f) => f.vx));
+      return r.frames.find((f) => f.vx >= 0.9 * top)!.t;
+    };
+    expect(t90(0.4)).toBeGreaterThan(t90(1));
+  });
+  it("control latency of one tick is applied by default", () => {
+    const lat0 = runSingleMotion(cfg, m("turnToHeading", { x: 0, y: 0, heading: 90 }), undefined, { latencyTicks: 0 });
+    const lat1 = runSingleMotion(cfg, m("turnToHeading", { x: 0, y: 0, heading: 90 }));
+    expect(lat0.frames.at(-1)!.heading).toBeGreaterThan(80);
+    expect(lat1.frames.at(-1)!.heading).toBeGreaterThan(80);
+  });
+});
+
 describe("routines and actions", () => {
   const routine: Routine = {
     name: "t", gameId: "blank", alliance: "red", start: { x: 0, y: 0, heading: 0 },
@@ -125,6 +147,25 @@ describe("routines and actions", () => {
     const r = simulate({ ...routine, steps: [routine.steps[0]] }, cfg, { fieldSize: 144, objects: [obj], obstacles: [] });
     intakeOnAtHalf = r.world.mech.intake === 0;
     expect(intakeOnAtHalf).toBe(true);
+  });
+  it("wait steps take the requested time", () => {
+    const r = simulate({ ...routine, steps: [{ id: "w", motion: m("wait", { x: 0, y: 0, heading: 0 }, { ms: 500 }), actions: [] }] }, cfg, { fieldSize: 144, objects: [], obstacles: [] });
+    expect(r.steps[0].end - r.steps[0].start).toBeGreaterThan(0.49);
+    expect(r.steps[0].end - r.steps[0].start).toBeLessThan(0.53);
+  });
+  it("delay-triggered actions fire in list order at their delay", () => {
+    const r = simulate({ ...routine, steps: [{ id: "d", motion: m("moveToPoint", { x: 0, y: 40, heading: 0 }), actions: [
+      { id: "x1", type: "intakeIn", when: { kind: "delay", ms: 300 } },
+      { id: "x2", type: "intakeStop", when: { kind: "delay", ms: 700 } },
+    ] }] }, cfg, { fieldSize: 144, objects: [], obstacles: [] });
+    expect(r.triggers.map((t) => t.actionId)).toEqual(["x1", "x2"]);
+    expect(r.triggers[0].offsetMs).toBeGreaterThanOrEqual(300);
+    expect(r.triggers[0].offsetMs).toBeLessThan(330);
+    expect(r.triggers[1].offsetMs).toBeGreaterThanOrEqual(700);
+  });
+  it("warns when a distance trigger is never reached", () => {
+    const r = simulate({ ...routine, steps: [{ id: "d", motion: m("moveToPoint", { x: 0, y: 20, heading: 0 }), actions: [{ id: "x1", type: "clamp", when: { kind: "distance", value: 200 } }] }] }, cfg, { fieldSize: 144, objects: [], obstacles: [] });
+    expect(r.warnings.some((w) => w.text.includes("never reached"))).toBe(true);
   });
   it("mirroring flips x and heading", () => {
     const mr = mirrorRoutine({ ...routine, start: { x: -40, y: -50, heading: 20 }, steps: [{ id: "x", motion: m("moveToPose", { x: -10, y: 5, heading: 30 }), actions: [] }] });

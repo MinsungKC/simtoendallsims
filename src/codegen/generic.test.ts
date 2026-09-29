@@ -2,12 +2,13 @@ import { describe, expect, it } from "vitest";
 import { generateGeneric } from "./generic";
 import { fixtureInput } from "./fixture";
 import { compileCheck, haveRefs, REFS } from "./compile";
-import { simulate } from "../core/runtime";
+import type { Recording } from "../core/runtime";
 import { join } from "node:path";
 
 describe("generic PROS generator", () => {
   const input = fixtureInput();
-  const recording = simulate(input.routine, input.cfg, { fieldSize: 144, objects: [], obstacles: [] });
+  // fixed trigger timings keep the golden snapshot independent of physics tuning
+  const recording = { triggers: [{ step: 1, actionId: "a2", offsetMs: 900, distance: 20 }, { step: 6, actionId: "a4", offsetMs: 400, distance: 0 }] } as unknown as Recording;
   const res = generateGeneric({ ...input, recording });
   const main = res.files[0].content;
 

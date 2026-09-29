@@ -28,7 +28,7 @@ void odom_constants() {
 }
 
 void auton_1_step2_actions() {
-  wait(630, msec); // ~when the simulated robot had traveled 20 (re-time on robot)
+  wait(900, msec); // ~when the simulated robot had traveled 20 (re-time on robot)
   clamp_piston.open();
 }
 

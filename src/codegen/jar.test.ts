@@ -2,12 +2,13 @@ import { describe, expect, it } from "vitest";
 import { generateJar } from "./jar";
 import { fixtureInput } from "./fixture";
 import { compileCheck, haveRefs, REFS } from "./compile";
-import { simulate } from "../core/runtime";
+import type { Recording } from "../core/runtime";
 import { join, resolve } from "node:path";
 
 describe("JAR-Template generator", () => {
   const input = fixtureInput();
-  const recording = simulate(input.routine, input.cfg, { fieldSize: 144, objects: [], obstacles: [] });
+  // fixed trigger timings keep the golden snapshot independent of physics tuning
+  const recording = { triggers: [{ step: 1, actionId: "a2", offsetMs: 900, distance: 20 }, { step: 6, actionId: "a4", offsetMs: 400, distance: 0 }] } as unknown as Recording;
   const res = generateJar({ ...input, recording });
   const autons = res.files.find((f) => f.path === "src/autons.cpp")!.content;
   const main = res.files.find((f) => f.path === "src/main.cpp")!.content;

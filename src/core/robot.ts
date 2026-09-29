@@ -79,6 +79,10 @@ export interface RobotConfig {
   horizontalDrift: number;
   /** Other (non-drive) motor watts on the robot, for the budget check */
   otherMotorsW: number;
+  /** Calibration: multiplies all tire friction coefficients (1 = defaults). Lower it if the real robot slips more. */
+  grip: number;
+  /** Calibration: drivetrain efficiency after gearbox/chain losses (0.5-1). Lower it if the real robot is slower. */
+  efficiency: number;
   /** Intake capture zone in front of the robot (robot frame), inches. null = none */
   intake: IntakeSpec | null;
 }
@@ -130,6 +134,8 @@ export function defaultRobot(): RobotConfig {
     angular: { kP: 2, kI: 0, kD: 10, windupRange: 3, smallError: 1, smallErrorTimeout: 100, largeError: 3, largeErrorTimeout: 500, slew: 0 },
     horizontalDrift: 8,
     otherMotorsW: 33,
+    grip: 1,
+    efficiency: 0.88,
     intake: { reach: 4, width: 12, capacity: 6 },
   };
 }
