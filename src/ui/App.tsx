@@ -11,7 +11,7 @@ import { games } from "../games";
 import { preflight } from "../core/preflight";
 import { useMemo, useState } from "react";
 import { TOOLS } from "./RoutinePanel";
-import { useEditor, useStore, type ProjectFile, type Tab } from "./store";
+import { OVERLAY_LABELS, useEditor, useStore, type Overlays, type ProjectFile, type Tab } from "./store";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "routine", label: "Route" },
@@ -152,6 +152,7 @@ export function App() {
           {TOOLS.map((t) => <button key={t.id} className={st.tool === t.id ? "active" : ""} title={t.hint} onClick={() => st.setTool(t.id)}>{t.label}</button>)}
           {st.tool === "draw" && <><span className="sep" /><span className="lbl">Leads with</span><button className={!st.drawReverse ? "active" : ""} onClick={() => st.setDrawReverse(false)}>Front</button><button className={st.drawReverse ? "active" : ""} onClick={() => st.setDrawReverse(true)}>Back</button></>}
         </div>
+        <details className="view"><summary>View</summary><div>{(Object.keys(OVERLAY_LABELS) as (keyof Overlays)[]).map((k) => <label key={k}><input type="checkbox" checked={st.overlays[k]} onChange={(e) => st.setOverlay(k, e.target.checked)} /> {OVERLAY_LABELS[k]}</label>)}</div></details>
         <Guide steps={routine.steps.length} />
         <FieldCanvas />
         <div className="legend">

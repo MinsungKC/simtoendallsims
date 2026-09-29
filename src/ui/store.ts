@@ -7,8 +7,21 @@ import { games } from "../games";
 import { worldInit, type CustomField, type GameModule } from "../games/types";
 import { defaultPorts, type Ports, type TargetId } from "../codegen";
 import type { CodeFrame } from "../core/frame";
+import { optimizeTimeouts as optimizeTimeoutsCore } from "../core/tune";
+import { planRoutes, type PlanCandidate, type PlanTask } from "../core/planner";
 
-export type Tool = "select" | "draw" | "moveToPoint" | "moveToPose" | "turnToPoint" | "follow" | "objects";
+export interface Overlays { plan: boolean; trail: boolean; odom: boolean; footprints: boolean; dots: boolean; zones: boolean; tape: boolean; pieces: boolean }
+export const OVERLAY_LABELS: Record<keyof Overlays, string> = {
+  plan: "Planned route (dashed)", trail: "Simulated path", odom: "Odometry estimate", footprints: "Robot outlines along the path",
+  dots: "Numbered step dots (all steps)", zones: "Pickup zones on the robot", tape: "Field tape & lines", pieces: "Game pieces",
+};
+const OVERLAY_KEY = "simtoendallsims:overlays";
+export function loadOverlays(): Overlays {
+  const d: Overlays = { plan: true, trail: true, odom: false, footprints: false, dots: true, zones: true, tape: true, pieces: true };
+  try { return { ...d, ...(JSON.parse(localStorage.getItem(OVERLAY_KEY) ?? "{}") as Partial<Overlays>) }; } catch { return d; }
+}
+
+export type Tool = "select" | "draw" | "targets" | "moveToPoint" | "moveToPose" | "turnToPoint" | "follow" | "objects";
 export type Tab = "robot" | "routine" | "code" | "field";
 
 interface Snapshot { robot: RobotConfig; ports: Ports; routine: Routine }
@@ -60,6 +73,21 @@ interface Store {
   setGame: (id: string) => void;
   setTarget: (t: TargetId) => void;
   setCodeFrame: (f: CodeFrame) => void;
+  tasks: PlanTask[];
+  plans: PlanCandidate[] | null;
+  planning: number | null;
+  addTask: (t: Omit<PlanTask, "id">) => void;
+  updateTask: (id: string, patch: Partial<PlanTask>) => void;
+  removeTask: (id: string) => void;
+  moveTask: (id: string, d: number) => void;
+  clearTasks: () => void;
+  runPlan: () => Promise<void>;
+  stopPlan: () => void;
+  applyPlan: (c: PlanCandidate) => void;
+  scoreOf: (c: PlanCandidate) => string;
+  overlays: Overlays;
+  setOverlay: (k: keyof Overlays, v: boolean) => void;
+  optimizeTimeouts: () => void;
   drawReverse: boolean;
   setDrawReverse: (v: boolean) => void;
   addSteps: (motions: MotionSpec[]) => string | null;
@@ -203,6 +231,7 @@ const persist = (s: Store): void => {
   }
 };
 
+let stopFlag = false;
 let simTimer: ReturnType<typeof setTimeout> | null = null;
 
 export const useStore = create<Store>((set, get) => {
@@ -287,6 +316,44 @@ export const useStore = create<Store>((set, get) => {
       changed();
     },
     setTarget: (target) => { set({ target }); persist(get()); },
+    tasks: [],
+    plans: null,
+    planning: null,
+    addTask: (t) => set((s) => ({ tasks: [...s.tasks, { ...t, id: uid("t") }], plans: null })),
+    updateTask: (id, patch) => set((s) => ({ tasks: s.tasks.map((t) => (t.id === id ? { ...t, ...patch } : t)), plans: null })),
+    removeTask: (id) => set((s) => ({ tasks: s.tasks.filter((t) => t.id !== id), plans: null })),
+    moveTask: (id, d) => set((s) => { const a = s.tasks.slice(); const i = a.findIndex((t) => t.id === id); const j = i + d; if (i < 0 || j < 0 || j >= a.length) return {}; [a[i], a[j]] = [a[j], a[i]]; return { tasks: a, plans: null }; }),
+    clearTasks: () => set({ tasks: [], plans: null }),
+    runPlan: async () => {
+      const s = get();
+      if (!s.tasks.length || s.planning !== null) return;
+      const g = s.game();
+      const init = worldInit(g, s.routine.alliance);
+      const world = s.customField ? { ...init, objects: [...s.customField.objects, ...init.objects.filter((o) => o.held)], obstacles: s.customField.obstacles } : init;
+      stopFlag = false;
+      set({ planning: 0, plans: null });
+      const plans = await planRoutes({
+        routine: { ...s.routine, steps: [] }, tasks: s.tasks, cfg: s.robot, game: g, world, obstacles: world.obstacles, seed: s.simOpts.seed,
+        onProgress: (p) => set({ planning: p }), shouldStop: () => stopFlag,
+      });
+      set({ plans, planning: null });
+    },
+    stopPlan: () => { stopFlag = true; },
+    applyPlan: (c) => {
+      pushHistory();
+      set((s) => ({ routine: { ...s.routine, steps: c.routine.steps }, selected: null, time: 0 }));
+      changed();
+    },
+    scoreOf: (c) => { const g = get().game(); const sc = g.score(c.recording.world); return get().routine.alliance === "red" ? String(sc.red) : String(sc.blue); },
+    overlays: loadOverlays(),
+    setOverlay: (k, v) => { const overlays = { ...get().overlays, [k]: v }; set({ overlays }); try { localStorage.setItem(OVERLAY_KEY, JSON.stringify(overlays)); } catch { /* ignore */ } },
+    optimizeTimeouts: () => {
+      const rec = get().recording;
+      if (!rec) return;
+      pushHistory();
+      set((s) => ({ routine: optimizeTimeoutsCore(s.routine, rec.steps) }));
+      changed();
+    },
     drawReverse: false,
     setDrawReverse: (drawReverse) => set({ drawReverse }),
     addSteps: (motions) => {

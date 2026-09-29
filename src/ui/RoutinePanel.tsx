@@ -3,6 +3,7 @@ import { planPoses } from "../core/common-plan";
 import { describeMotion } from "../codegen/common";
 import { pathLength } from "../core/path";
 import { Check, Num, Sel, Section } from "./atoms";
+import { PlanPanel } from "./PlanPanel";
 import { bearingDeg, fmt } from "./helpers";
 import { useEditor, type Tool } from "./store";
 
@@ -18,6 +19,7 @@ const ACTION_LABEL: Record<ActionType, string> = {
 export const TOOLS: { id: Tool; label: string; hint: string }[] = [
   { id: "moveToPoint", label: "Drive to", hint: "Click the field to add a drive-to point" },
   { id: "draw", label: "✎ Draw path", hint: "Hold and drag on the field to draw any curve freehand; it is smoothed automatically and the robot's predicted path appears" },
+  { id: "targets", label: "🎯 Pick targets", hint: "Click goals, pieces or toggles in the order you want to visit them, then get the 3 fastest working routes" },
   { id: "follow", label: "Curve (click)", hint: "Click the field to add a smooth curved path" },
   { id: "moveToPose", label: "Drive + end facing", hint: "Click the field to drive there and end at a set heading (boomerang)" },
   { id: "turnToPoint", label: "Face a spot", hint: "Click the field to turn the robot toward that spot" },
@@ -56,11 +58,13 @@ export function RoutinePanel() {
         </div>
       </Section>
 
+      <PlanPanel />
+
       <Section title={`Steps (${routine.steps.length})`} right={
-        <select value="" onChange={(e) => { if (e.target.value) addByType(e.target.value as MotionSpec["type"]); }}>
+        <span className="btns inline"><button onClick={st.optimizeTimeouts} title="Set every step's timeout from how long it really takes in the simulation">Auto timeouts</button><select value="" onChange={(e) => { if (e.target.value) addByType(e.target.value as MotionSpec["type"]); }}>
           <option value="">+ Other step…</option>
           {(Object.keys(MOTION_LABEL) as MotionSpec["type"][]).map((t) => <option key={t} value={t}>{MOTION_LABEL[t]}</option>)}
-        </select>
+        </select></span>
       }>
         {routine.steps.length === 0 && <p className="note">No steps yet. Just click the field where the robot should drive.</p>}
         <ol className="steps">
@@ -177,6 +181,7 @@ function MotionEditor({ step, before }: { step: Step; before: { x: number; y: nu
       const len = pathLength(m.path);
       return <>
         <Check label="Forwards" value={m.forwards} onChange={(v) => up({ forwards: v })} />
+        <EndFacing step={step} />
         <Num label="Lookahead" value={m.lookahead} onChange={(v) => up({ lookahead: v })} step={1} min={2} unit="in" hint="Smaller follows the path tighter; larger is faster/looser (10-15 typical)." />
         <Num label="Path max speed" value={m.path.maxSpeed} onChange={(v) => up({ path: { ...m.path, maxSpeed: v } })} min={10} max={127} />
         <Num label="Path min speed" value={m.path.minSpeed} onChange={(v) => up({ path: { ...m.path, minSpeed: v } })} min={5} max={127} />
@@ -199,6 +204,15 @@ function MotionEditor({ step, before }: { step: Step; before: { x: number; y: nu
     case "wait":
       return <Num label="Duration" value={m.ms} onChange={(v) => up({ ms: v })} step={50} min={0} unit="ms" />;
   }
+}
+
+/** The ending face of a curve is the turn step right after it; this edits (or creates) it. */
+function EndFacing({ step }: { step: Step }) {
+  const st = useEditor();
+  const i = st.routine.steps.findIndex((s) => s.id === step.id);
+  const next = st.routine.steps[i + 1];
+  if (next && next.motion.type === "turnToHeading") return <Num label="End facing" value={next.motion.heading} onChange={(v) => st.updateMotion(next.id, { heading: v })} unit="°" hint="0 = up the field, clockwise positive. Drag the arrow at the end of the curve too." />;
+  return <button onClick={() => { const end = planPoses(st.routine, st.robot).after[i]; st.addStep(defaultMotion("turnToHeading", { x: end.x, y: end.y, heading: Math.round(end.heading) }), i + 1); }}>+ Set the ending face</button>;
 }
 
 function ActionsEditor({ step }: { step: Step }) {

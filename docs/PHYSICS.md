@@ -83,3 +83,9 @@ inertia and the intake zone still come from the plain length x width box.
 ## Things I could not verify from here
 Real V5 stall current, 5.5 W motor curve, tire friction on your tiles, battery internal resistance, and the Override manual's
 field geometry and motor caps. All are marked `UNVERIFIED` in the code/UI and listed in `SOURCES.md`.
+
+## Auto-tune and timeouts
+The tuner scores kP/kD on how long moves really take (exit time and settle time over 12", 24", 48" drives and 45/90/180 deg turns),
+overshoot and final error, averaged over +-20% gain variations, with wide ranges (lateral kD up to 160). The old version penalised gain
+size and searched narrow ranges, which produced slow, gentle gains. "Auto timeouts" (Route tab) sets each step's timeout to
+1.6x its simulated time + 300 ms.

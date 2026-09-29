@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fitStroke } from "../core/fit";
-import { routeFromStroke, avoidObstacles } from "../core/autoroute";
+import { avoidObstacles } from "../core/autoroute";
 import { forwardOf, rightOf } from "../core/geometry";
 import { planPoses } from "../core/common-plan";
-import { samplePath } from "../core/path";
+import { pathLength, samplePath } from "../core/path";
 import type { PathSpec } from "../core/routine";
 import { defaultMotion } from "../core/routine";
 import { obstaclePoly } from "../core/world";
@@ -42,7 +42,7 @@ export function FieldCanvas() {
 
   const [bumpKey, setBumpKey] = useState(0);
   const store = useStore();
-  const { recording, time, routine, robot, selected, tool, customField } = store;
+  const { recording, time, routine, robot, selected, tool, customField, overlays, tasks } = store;
   const game = store.game();
   const fieldSize = game.fieldSize.value;
 
@@ -87,12 +87,12 @@ export function FieldCanvas() {
       else { ctx.beginPath(); ctx.arc(px(z.geom.x), py(z.geom.y), z.geom.r * S, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
     }
     // game tape lines and regions (Midfield, Load Zones, Autonomous Line ...)
-    for (const poly of game.polys ?? []) {
+    if (overlays.tape) for (const poly of game.polys ?? []) {
       ctx.beginPath(); poly.verts.forEach((v, i) => (i ? ctx.lineTo(px(v.x), py(v.y)) : ctx.moveTo(px(v.x), py(v.y)))); if (poly.closed !== false) ctx.closePath();
       if (poly.fill) { ctx.fillStyle = poly.fill; ctx.fill(); }
       ctx.strokeStyle = poly.stroke ?? "#ffffff88"; ctx.lineWidth = poly.strokeWidth ? poly.strokeWidth * S : 2; ctx.lineJoin = "miter"; ctx.lineCap = "butt"; ctx.stroke();
     }
-    for (const l of game.lines) {
+    if (overlays.tape) for (const l of game.lines) {
       ctx.strokeStyle = l.color ?? "#ffffff88"; ctx.beginPath(); ctx.moveTo(px(l.x1), py(l.y1)); ctx.lineTo(px(l.x2), py(l.y2));
       if (l.width) { ctx.lineWidth = l.width * S; ctx.lineCap = "butt"; ctx.stroke(); }
       else { ctx.lineWidth = 2.5; ctx.setLineDash([10, 6]); ctx.stroke(); ctx.setLineDash([]); }
@@ -130,8 +130,8 @@ export function FieldCanvas() {
       else if (o.kind === "mobile-goal") { ctx.beginPath(); ctx.arc(px(x), py(y), r, 0, Math.PI * 2); ctx.fillStyle = "#e2b93b33"; ctx.fill(); ctx.strokeStyle = "#e2b93b"; ctx.lineWidth = 2.5; ctx.stroke(); }
       else { ctx.beginPath(); ctx.arc(px(x), py(y), r, 0, Math.PI * 2); ctx.fillStyle = TEAM_COLOR[o.team]; ctx.fill(); }
     };
-    meta.forEach((o, i) => { const p = at(o, i); if (p.st === 1 || p.st === 3 || o.kind === "pin") return; if (o.kind === "cup") { if (p.st === 6) drawLyingCup(F, p.x, p.y, p.ang, o.opaqueUp); else drawCup(F, p.x, p.y, o.opaqueUp); } else generic(o, p.x, p.y); });
-    meta.forEach((o, i) => {
+    if (overlays.pieces) meta.forEach((o, i) => { const p = at(o, i); if (p.st === 1 || p.st === 3 || o.kind === "pin") return; if (o.kind === "cup") { if (p.st === 6) drawLyingCup(F, p.x, p.y, p.ang, o.opaqueUp); else drawCup(F, p.x, p.y, o.opaqueUp); } else generic(o, p.x, p.y); });
+    if (overlays.pieces) meta.forEach((o, i) => {
       if (o.kind !== "pin") return;
       const p = at(o, i);
       if (p.st === 1 || p.st === 3) return;
@@ -160,10 +160,10 @@ export function FieldCanvas() {
     }
 
     // planned route
-    ctx.setLineDash([5, 4]); ctx.strokeStyle = C.plan; ctx.lineWidth = 1.5; ctx.beginPath();
+    if (overlays.plan) { ctx.setLineDash([5, 4]); ctx.strokeStyle = C.plan; ctx.lineWidth = 1.5; ctx.beginPath();
     ctx.moveTo(px(routine.start.x), py(routine.start.y));
     planned.after.forEach((p, i) => { if (routine.steps[i].motion.type !== "follow") ctx.lineTo(px(p.x), py(p.y)); else ctx.moveTo(px(p.x), py(p.y)); });
-    ctx.stroke(); ctx.setLineDash([]);
+    ctx.stroke(); ctx.setLineDash([]); }
 
     // follow paths
     handles.current = [];
@@ -185,18 +185,20 @@ export function FieldCanvas() {
     });
 
     // trails (true = solid, odometry estimate = thin)
-    if (frames && frames.length) {
+    if (frames && frames.length && (overlays.trail || overlays.odom)) {
       const upto = frameIndex(frames, time);
+      if (overlays.trail) {
       ctx.lineWidth = 2.5; ctx.strokeStyle = "#f0b34a"; ctx.beginPath();
       for (let k = 0; k <= upto; k++) (k ? ctx.lineTo(px(frames[k].x), py(frames[k].y)) : ctx.moveTo(px(frames[0].x), py(frames[0].y)));
-      ctx.stroke();
+      ctx.stroke(); }
+      if (overlays.odom) {
       ctx.lineWidth = 1; ctx.strokeStyle = "#ff6ba8"; ctx.beginPath();
       for (let k = 0; k <= upto; k++) (k ? ctx.lineTo(px(frames[k].ex), py(frames[k].ey)) : ctx.moveTo(px(frames[0].ex), py(frames[0].ey)));
-      ctx.stroke();
+      ctx.stroke(); }
     }
 
     // predicted footprint: the robot's outline every ~10 in along the simulated path
-    if (frames && frames.length > 1) {
+    if (overlays.footprints && frames && frames.length > 1) {
       ctx.save(); ctx.strokeStyle = "rgba(240,179,74,0.35)"; ctx.lineWidth = 1;
       let acc = 1e9, px0 = frames[0].x, py0 = frames[0].y;
       for (const f of frames) {
@@ -220,6 +222,13 @@ export function FieldCanvas() {
       sm.forEach((q, i) => (i ? ctx.lineTo(px(q.x), py(q.y)) : ctx.moveTo(px(q.x), py(q.y)))); ctx.stroke();
     }
 
+    // planner targets
+    tasks.forEach((t, i) => {
+      ctx.beginPath(); ctx.arc(px(t.x), py(t.y), Math.max(9, 3.5 * S), 0, Math.PI * 2); ctx.strokeStyle = "#ffd24a"; ctx.lineWidth = 2.5; ctx.stroke();
+      ctx.fillStyle = "#ffd24a"; ctx.font = "bold 11px system-ui"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(String(i + 1), px(t.x) + Math.max(9, 3.5 * S) + 7, py(t.y) - Math.max(9, 3.5 * S) - 2);
+      if (t.approach !== "auto") { const f = forwardOf(t.approach); ctx.beginPath(); ctx.moveTo(px(t.x - f.x * 8), py(t.y - f.y * 8)); ctx.lineTo(px(t.x), py(t.y)); ctx.stroke(); }
+    });
+
     // robot
     const drawBody = (x: number, y: number, heading: number, dashed: boolean, alpha: number) => {
       ctx.save(); ctx.translate(px(x), py(y)); ctx.rotate((heading * Math.PI) / 180);
@@ -229,8 +238,8 @@ export function FieldCanvas() {
       else {
         ctx.fillStyle = "rgba(80,150,255,0.5)"; ctx.strokeStyle = "#8ec1ff"; ctx.lineWidth = 2;
         for (const c of chassisRects(robot)) { ctx.fillRect((c.cx - c.w / 2) * S, -(c.cy + c.h / 2) * S, c.w * S, c.h * S); ctx.strokeRect((c.cx - c.w / 2) * S, -(c.cy + c.h / 2) * S, c.w * S, c.h * S); }
-        if (robot.intake) { ctx.fillStyle = "rgba(120,220,140,0.25)"; ctx.fillRect(-(robot.intake.width / 2) * S, -l / 2 - robot.intake.reach * S, robot.intake.width * S, robot.intake.reach * S); }
-        if (robot.rearIntake) { ctx.fillStyle = robot.rearIntake.standingOnly ? "rgba(90,200,230,0.25)" : "rgba(120,220,140,0.25)"; ctx.fillRect(-(robot.rearIntake.width / 2) * S, l / 2, robot.rearIntake.width * S, robot.rearIntake.reach * S); }
+        if (overlays.zones && robot.intake) { ctx.fillStyle = "rgba(120,220,140,0.25)"; ctx.fillRect(-(robot.intake.width / 2) * S, -l / 2 - robot.intake.reach * S, robot.intake.width * S, robot.intake.reach * S); }
+        if (overlays.zones && robot.rearIntake) { ctx.fillStyle = robot.rearIntake.standingOnly ? "rgba(90,200,230,0.25)" : "rgba(120,220,140,0.25)"; ctx.fillRect(-(robot.rearIntake.width / 2) * S, l / 2, robot.rearIntake.width * S, robot.rearIntake.reach * S); }
         for (const wh of robot.wheels) for (const side of [-1, 1]) {
           ctx.fillStyle = wh.type === "omni" ? "#eee" : "#222";
           const wl = robot.wheelDiameter * S;
@@ -262,6 +271,7 @@ export function FieldCanvas() {
       const before = planned.before[i];
       const after = planned.after[i];
       const sel = s.id === selected;
+      if (!overlays.dots && !sel) return;
       const color = sel ? "#f0b34a" : "#8b96b3";
       if (m.type === "moveToPoint" || m.type === "moveToPose" || m.type === "turnToPoint") {
         dot(m.x, m.y, color, HANDLE_R, String(i + 1));
@@ -272,6 +282,8 @@ export function FieldCanvas() {
         dot(after.x + 4, after.y + 4, color, 6, String(i + 1));
       } else if (m.type === "follow") {
         dot(after.x, after.y, color, 9, String(i + 1));
+        const nx = routine.steps[i + 1];
+        if (nx && nx.motion.type === "turnToHeading" && (sel || nx.id === selected)) arrowHandle(after.x, after.y, nx.motion.heading, nx.id, "step-heading", "#f0b34a");
       } else if (m.type === "setPose") dot(m.x, m.y, color, 6, "P");
     });
     // start
@@ -282,7 +294,7 @@ export function FieldCanvas() {
     if (tool === "objects") world.objects.forEach((o) => handles.current.push({ kind: "object", id: String(o.id), x: o.x, y: o.y, r: Math.max(6, o.r * S) }));
 
     void rightOf; void C;
-  }, [recording, time, routine, robot, selected, tool, world, planned, fieldSize, bumpKey]);
+  }, [recording, time, routine, robot, selected, tool, world, planned, fieldSize, bumpKey, overlays, tasks]);
 
   useEffect(() => { draw(); }, [draw]);
 
@@ -331,6 +343,17 @@ export function FieldCanvas() {
     }
     if (st.tool === "select" || st.tool === "objects") { st.select(null); return; }
     if (st.tool === "draw") { stroke.current = [{ x: p.x, y: p.y }]; return; }
+    if (st.tool === "targets") {
+      const g = st.game();
+      const objs = (st.customField?.objects ?? g.objects).filter((o) => !o.stackedIn && o.nestedIn === undefined);
+      const cands: { d: number; t: Omit<import("../core/planner").PlanTask, "id"> }[] = [];
+      for (const q of g.goals ?? []) cands.push({ d: Math.hypot(q.x - p.x, q.y - p.y) - 2, t: { label: `Goal ${q.id}`, x: q.x, y: q.y, targetKind: "goal", action: "place", side: "auto", approach: "auto" } });
+      for (const q of g.toggles ?? []) cands.push({ d: Math.max(0, Math.hypot(q.x - p.x, q.y - p.y) - 10), t: { label: `Toggle ${q.wall}`, x: q.x, y: q.y, targetKind: "toggle", action: "toggle", side: "front", approach: { N: 0, E: 90, S: 180, W: 270 }[q.wall] } });
+      for (const q of objs) cands.push({ d: Math.hypot(q.x - p.x, q.y - p.y) - q.r, t: { label: q.kind === "cup" ? "Cup" : q.kind === "pin" ? "Pin" : q.kind, x: q.x, y: q.y, targetKind: "object", action: "pickup", side: "auto", approach: "auto", lying: !!q.lying } });
+      cands.sort((a, b) => a.d - b.d);
+      if (cands[0] && cands[0].d < 4) st.addTask(cands[0].t);
+      return;
+    }
     // add-step tools
     const last = planPoses(st.routine, st.robot).after.at(-1) ?? { ...st.routine.start };
     const pos = { x: snap(p.x), y: snap(p.y) };
@@ -400,8 +423,20 @@ export function FieldCanvas() {
     const last = planPoses(st.routine, st.robot).after.at(-1) ?? { ...st.routine.start };
     const g = st.game();
     const obstacles = st.customField ? st.customField.obstacles : g.obstacles;
-    const motions = routeFromStroke(ink, { obstacles, fieldSize, clearance: st.robot.width / 2 + 1, reverse: st.drawReverse, from: { x: last.x, y: last.y } });
-    st.addSteps(motions);
+    // one smooth curve (obstacle-avoided, tangent-continuous), then a turn that sets the ending face
+    const safe = avoidObstacles([{ x: last.x, y: last.y }, ...ink], { obstacles, fieldSize, clearance: st.robot.width / 2 + 1 });
+    const segments = fitStroke(safe);
+    if (!segments.length) return;
+    const m = defaultMotion("follow", { x: last.x, y: last.y, heading: last.heading });
+    if (m.type !== "follow") return;
+    m.forwards = !st.drawReverse;
+    m.path.segments = segments.map((sg) => ({ p: sg.p.map((q) => ({ x: Math.round(q.x * 100) / 100, y: Math.round(q.y * 100) / 100 })) as typeof sg.p }));
+    m.timeout = Math.max(2000, Math.ceil(((pathLength(m.path) / 35) * 1000 + 1000) / 100) * 100);
+    const end = m.path.segments.at(-1)!.p;
+    const tangent = bearingDeg(end[2].x === end[3].x && end[2].y === end[3].y ? end[1] : end[2], end[3]);
+    const face = Math.round(tangent + (st.drawReverse ? 180 : 0));
+    const turn = defaultMotion("turnToHeading", { x: end[3].x, y: end[3].y, heading: ((face + 540) % 360) - 180 });
+    st.addSteps([m, turn]);
   };
 
   return (
