@@ -1,7 +1,7 @@
 import { derive } from "../core/robot";
 import { toLemLibPathFile } from "../core/path";
 import type { MotionSpec, Step } from "../core/routine";
-import { actionCpp, describeMotion, indent, motorList, num, pathAssetName, pathIndices, splitActions } from "./common";
+import { actionCpp, mechanismStubs, describeMotion, indent, motorList, num, pathAssetName, pathIndices, splitActions } from "./common";
 import type { GenFile, GenInput, GenResult } from "./types";
 
 export const LEMLIB_VERSION = "v0.5.x (stable branch, PROS 4.2.x)";
@@ -164,6 +164,7 @@ export function generateLemLib(input: GenInput): GenResult {
   L.push("");
   for (const idx of paths.values()) L.push(`ASSET(${pathAssetName(idx)}); // static/path_${idx}.txt`);
   if (paths.size) L.push("");
+  L.push(...mechanismStubs(routine));
   L.push("void initialize() {");
   L.push("    pros::lcd::initialize();");
   L.push("    chassis.calibrate(); // calibrate sensors");

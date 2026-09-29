@@ -23,7 +23,7 @@ export function fixtureRoutine(): Routine {
       { id: "s4", motion: defaultMotion("swingToHeading", at(0, 0, 180)), actions: [] },
       { id: "s5", motion: defaultMotion("turnToPoint", at(0, 24)), actions: [] },
       { id: "s6", motion: defaultMotion("follow", at(-24, -24)), actions: [{ id: "a4", type: "eject", when: { kind: "delay", ms: 400 } }] },
-      { id: "s7", motion: defaultMotion("wait", at(0, 0)), actions: [{ id: "a5", type: "unclamp", when: { kind: "end" } }, { id: "a6", type: "custom", code: "// custom code here", when: { kind: "end" } }] },
+      { id: "s7", motion: defaultMotion("wait", at(0, 0)), actions: [{ id: "a5", type: "unclamp", when: { kind: "end" } }, { id: "a6", type: "custom", code: "// custom code here", when: { kind: "end" } }, { id: "a7", type: "place", when: { kind: "end" } }, { id: "a8", type: "toggleSet", arg: "blue", when: { kind: "end" } }] },
     ],
   };
 }

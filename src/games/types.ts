@@ -1,5 +1,9 @@
 import type { MotorBudgetRules } from "../core/motors";
-import type { GameObject, Obstacle, World, WorldInit } from "../core/world";
+import type { GameObject, GameRules, GoalState, Obstacle, ToggleState, World, WorldInit } from "../core/world";
+import type { Vec } from "../core/geometry";
+import type { RobotConfig } from "../core/robot";
+import type { Routine } from "../core/routine";
+import type { Recording } from "../core/runtime";
 
 /** A value that has (or hasn't) been checked against the official manual. */
 export interface Sourced<T> {
@@ -38,6 +42,30 @@ export interface ScoreResult {
   red: number;
   blue: number;
   lines: { label: string; red: number; blue: number }[];
+  /** Extra information (Autonomous Win Point status, ...) */
+  notes?: string[];
+}
+
+/** Drawn field regions (Midfield, Load Zones, ...). */
+export interface FieldPoly {
+  verts: Vec[];
+  label?: string;
+  fill?: string;
+  stroke?: string;
+}
+
+export interface RuleFinding {
+  level: "error" | "warn";
+  text: string;
+  /** Step index the finding relates to (-1 = whole routine) */
+  step?: number;
+}
+
+export interface RuleContext {
+  routine: Routine;
+  cfg: RobotConfig;
+  recording: Recording;
+  world: World;
 }
 
 export interface FieldLine {
@@ -65,10 +93,29 @@ export interface GameModule {
   obstacles: Obstacle[];
   score(world: World): ScoreResult;
   notes: string[];
+  /** Static, interactive game elements (Goals with stacks, Toggles) and their rules */
+  goals?: Omit<GoalState, "stack">[];
+  toggles?: ToggleState[];
+  rules?: GameRules;
+  polys?: FieldPoly[];
+  /** Object held by the robot at the start of the match (a Preload) */
+  preload?: (alliance: "red" | "blue") => Omit<GameObject, "vx" | "vy" | "state"> | null;
+  /** Post-run rule checks (Autonomous Line, protected Goals, start legality, ...) */
+  check?: (ctx: RuleContext) => RuleFinding[];
+  /** Field elements whose position/size were reconstructed rather than read from the manual */
+  provenance?: { item: string; source: string; confidence: "manual" | "community" | "assumed" }[];
 }
 
-export function worldInit(g: GameModule): WorldInit {
-  return { fieldSize: g.fieldSize.value, objects: g.objects, obstacles: g.obstacles };
+export function worldInit(g: GameModule, alliance: "red" | "blue" = "red"): WorldInit {
+  const preload = g.preload?.(alliance);
+  return {
+    fieldSize: g.fieldSize.value,
+    objects: preload ? [...g.objects, preload] : g.objects,
+    obstacles: g.obstacles,
+    goals: g.goals,
+    toggles: g.toggles,
+    rules: g.rules,
+  };
 }
 
 /** Field layout that users can import/export as JSON to correct the practice layouts. */

@@ -2,7 +2,7 @@ import { derive } from "../core/robot";
 import { buildPathPoints } from "../core/path";
 import type { ActionSpec, MotionSpec, Step } from "../core/routine";
 import type { Recording } from "../core/runtime";
-import { actionCpp, describeMotion, ident, indent, motorList, num, pathIndices, splitActions } from "./common";
+import { actionCpp, mechanismStubs, describeMotion, ident, indent, motorList, num, pathIndices, splitActions } from "./common";
 import { GENERIC_RUNTIME } from "./genericRuntime";
 import type { GenInput, GenResult } from "./types";
 
@@ -142,6 +142,7 @@ export function generateGeneric(input: GenInput): GenResult {
     return out;
   };
 
+  L.push(...mechanismStubs(routine));
   L.push("void initialize() {");
   L.push("    pros::lcd::initialize();");
   L.push("    gen::init();");

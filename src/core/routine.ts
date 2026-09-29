@@ -10,7 +10,7 @@ export type Trigger =
   | { kind: "distance"; value: number } // inches traveled (turns: degrees turned) in the step - LemLib waitUntil()
   | { kind: "delay"; ms: number };
 
-export type ActionType = "intakeIn" | "intakeOut" | "intakeStop" | "clamp" | "unclamp" | "eject" | "custom";
+export type ActionType = "intakeIn" | "intakeOut" | "intakeStop" | "clamp" | "unclamp" | "eject" | "place" | "toggleSet" | "custom";
 
 export interface ActionSpec {
   id: string;
@@ -18,6 +18,8 @@ export interface ActionSpec {
   when: Trigger;
   /** custom: raw C++ emitted verbatim */
   code?: string;
+  /** place: prefer "pin" | "cup" | "any"; toggleSet: "red" | "blue" | "yellow" */
+  arg?: string;
   label?: string;
 }
 

@@ -4,6 +4,7 @@ import { planPoses } from "../core/common-plan";
 import { samplePath } from "../core/path";
 import type { PathSpec } from "../core/routine";
 import { defaultMotion } from "../core/routine";
+import { obstaclePoly } from "../core/world";
 import { bearingDeg, frameIndex, lerpFrame, TEAM_COLOR } from "./helpers";
 import { useStore } from "./store";
 import { worldInit, type CustomField } from "../games/types";
@@ -72,26 +73,82 @@ export function FieldCanvas() {
       if (z.geom.shape === "rect") { ctx.fillRect(px(z.geom.x - z.geom.w / 2), py(z.geom.y + z.geom.h / 2), z.geom.w * S, z.geom.h * S); ctx.strokeRect(px(z.geom.x - z.geom.w / 2), py(z.geom.y + z.geom.h / 2), z.geom.w * S, z.geom.h * S); }
       else { ctx.beginPath(); ctx.arc(px(z.geom.x), py(z.geom.y), z.geom.r * S, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
     }
-    for (const o of world.obstacles) { ctx.fillStyle = "#59647d"; ctx.fillRect(px(o.x - o.w / 2), py(o.y + o.h / 2), o.w * S, o.h * S); }
+    // game tape lines and regions (Midfield, Load Zones, Autonomous Line ...)
+    for (const poly of game.polys ?? []) {
+      ctx.beginPath(); poly.verts.forEach((v, i) => (i ? ctx.lineTo(px(v.x), py(v.y)) : ctx.moveTo(px(v.x), py(v.y)))); ctx.closePath();
+      if (poly.fill) { ctx.fillStyle = poly.fill; ctx.fill(); }
+      ctx.strokeStyle = poly.stroke ?? "#ffffff88"; ctx.lineWidth = 2; ctx.stroke();
+    }
+    for (const l of game.lines) { ctx.strokeStyle = l.color ?? "#ffffff88"; ctx.lineWidth = 2.5; ctx.setLineDash([10, 6]); ctx.beginPath(); ctx.moveTo(px(l.x1), py(l.y1)); ctx.lineTo(px(l.x2), py(l.y2)); ctx.stroke(); ctx.setLineDash([]); }
+
+    // static solid elements: real polygon footprints (octagonal Goals, Toggle bars, Loaders)
+    for (const o of world.obstacles) {
+      const poly = obstaclePoly(o);
+      ctx.beginPath(); poly.forEach((v, i) => (i ? ctx.lineTo(px(v.x), py(v.y)) : ctx.moveTo(px(v.x), py(v.y)))); ctx.closePath();
+      const tag = o.tag ?? "";
+      let fill = "#59647d", stroke = "#2b3448";
+      if (tag.startsWith("goal:")) { const id = tag.slice(5); fill = id.startsWith("red") ? "#c8423f" : id.startsWith("blue") ? "#2f6fd6" : id === "tall" ? "#2a2f3a" : "#5a6070"; stroke = "#0009"; }
+      else if (tag === "loader") fill = o.label.includes("red") ? "#a04a4a" : "#4a6aa0";
+      else if (tag === "toggle") fill = "#00000000";
+      ctx.fillStyle = fill; ctx.fill(); ctx.strokeStyle = stroke; ctx.lineWidth = 1.5; ctx.stroke();
+    }
+    // Toggles: three-color bar showing the currently set color
+    const toggleState = new Map<string, string>();
+    for (const t of game.toggles ?? []) toggleState.set(t.id, t.state);
+    for (const e of recording?.events ?? []) if (e.type === "toggle" && e.t <= time && e.toggle && e.color) toggleState.set(e.toggle, e.color);
+    for (const t of game.toggles ?? []) {
+      const horizontal = t.wall === "N" || t.wall === "S";
+      const col = toggleState.get(t.id) === "red" ? "#e5484d" : toggleState.get(t.id) === "blue" ? "#3e8bff" : "#e2b93b";
+      ctx.fillStyle = col;
+      const w = (horizontal ? 25.8 : 2.4) * S, h = (horizontal ? 2.4 : 25.8) * S;
+      ctx.fillRect(px(t.x) - w / 2, py(t.y) - h / 2, w, h);
+      ctx.strokeStyle = "#000a"; ctx.lineWidth = 1; ctx.strokeRect(px(t.x) - w / 2, py(t.y) - h / 2, w, h);
+    }
 
     // objects
     const frames = recording?.frames;
     const fr = frames && frames.length ? lerpFrame(frames, time) : null;
     const meta = recording ? recording.world.objects : world.objects;
+    const C_PIN: Record<string, string> = { red: "#e5484d", blue: "#3e8bff", yellow: "#e2b93b" };
+    const drawPin = (x: number, y: number, r: number, halves: [string, string] | undefined, flip: boolean | undefined) => {
+      const a = halves ? C_PIN[flip ? halves[1] : halves[0]] : "#ccc", b = halves ? C_PIN[flip ? halves[0] : halves[1]] : "#ccc";
+      ctx.beginPath(); ctx.arc(px(x), py(y), r, Math.PI / 2, (3 * Math.PI) / 2); ctx.closePath(); ctx.fillStyle = a; ctx.fill();
+      ctx.beginPath(); ctx.arc(px(x), py(y), r, -Math.PI / 2, Math.PI / 2); ctx.closePath(); ctx.fillStyle = b; ctx.fill();
+      ctx.strokeStyle = "#0008"; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(px(x), py(y), r, 0, Math.PI * 2); ctx.stroke();
+    };
+    const drawCup = (x: number, y: number, r: number, opaqueUp: boolean | undefined) => {
+      ctx.beginPath(); ctx.arc(px(x), py(y), r, 0, Math.PI * 2); ctx.fillStyle = opaqueUp ? "#8b93a3cc" : "#dfe9f6aa"; ctx.fill();
+      ctx.strokeStyle = "#0009"; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.beginPath(); ctx.arc(px(x), py(y), r * 0.55, 0, Math.PI * 2); ctx.strokeStyle = "#0004"; ctx.stroke();
+    };
     meta.forEach((o, i) => {
       let x = o.x, y = o.y, st = 0;
       if (fr) { x = fr.objs[i * 3]; y = fr.objs[i * 3 + 1]; st = fr.objs[i * 3 + 2]; }
       if (!fr && recording) { x = world.objects[i]?.x ?? o.x; y = world.objects[i]?.y ?? o.y; }
-      if (st === 1) return;
-      ctx.beginPath(); ctx.arc(px(x), py(y), Math.max(2, o.r * S), 0, Math.PI * 2);
-      if (o.kind === "ring") {
-        ctx.strokeStyle = TEAM_COLOR[o.team]; ctx.lineWidth = Math.max(2, o.r * S * 0.45); ctx.stroke();
-      } else if (o.kind === "mobile-goal") {
-        ctx.fillStyle = "#e2b93b33"; ctx.fill(); ctx.strokeStyle = "#e2b93b"; ctx.lineWidth = 2.5; ctx.stroke();
-      } else {
-        ctx.fillStyle = TEAM_COLOR[o.team] + (o.kind === "cup" ? "99" : "ff"); ctx.fill();
-      }
+      if (st === 1 || st === 3) return;
+      const r = Math.max(2, o.r * S);
+      if (o.kind === "pin") drawPin(x, y, r, o.halves, o.flip);
+      else if (o.kind === "cup") drawCup(x, y, r, o.opaqueUp);
+      else if (o.kind === "ring") { ctx.beginPath(); ctx.arc(px(x), py(y), r, 0, Math.PI * 2); ctx.strokeStyle = TEAM_COLOR[o.team]; ctx.lineWidth = Math.max(2, r * 0.45); ctx.stroke(); }
+      else if (o.kind === "mobile-goal") { ctx.beginPath(); ctx.arc(px(x), py(y), r, 0, Math.PI * 2); ctx.fillStyle = "#e2b93b33"; ctx.fill(); ctx.strokeStyle = "#e2b93b"; ctx.lineWidth = 2.5; ctx.stroke(); }
+      else { ctx.beginPath(); ctx.arc(px(x), py(y), r, 0, Math.PI * 2); ctx.fillStyle = TEAM_COLOR[o.team]; ctx.fill(); }
     });
+    // Goal stacks rebuilt from placement events up to the playhead: alternating Pin / Cup, drawn as a growing tower
+    if (game.goals?.length) {
+      const stacks = new Map<string, number[]>();
+      for (const e of recording?.events ?? []) if (e.type === "place" && e.t <= time && e.goal && e.id !== undefined) stacks.set(e.goal, [...(stacks.get(e.goal) ?? []), e.id]);
+      for (const g of game.goals) {
+        const ids = stacks.get(g.id) ?? [];
+        ids.forEach((id, level) => {
+          const o = recording?.world.objects.find((q) => q.id === id);
+          if (!o) return;
+          const off = level * 1.1;
+          if (o.kind === "pin") drawPin(g.x - off * 0.4, g.y + off * 0.4, Math.max(2.5, o.r * S * 1.3), o.halves, o.flip);
+          else drawCup(g.x - off * 0.4, g.y + off * 0.4, Math.max(3, o.r * S * 0.95), o.opaqueUp);
+        });
+        if (ids.length) { ctx.fillStyle = "#fff"; ctx.font = "bold 10px system-ui"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(String(ids.length), px(g.x + 6), py(g.y - 6)); }
+      }
+    }
 
     // planned route
     ctx.setLineDash([5, 4]); ctx.strokeStyle = C.plan; ctx.lineWidth = 1.5; ctx.beginPath();

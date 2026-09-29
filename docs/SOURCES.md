@@ -6,12 +6,15 @@
 | Item | Status | Source |
 |---|---|---|
 | Season order: High Stakes 24/25, Push Back 25/26, Override 26/27 | from the user + search | VEX forum / RECF |
+| **Override** field, 6x6 tiles, 15 s auton / 1:45 driver, 18" start size, object counts, Cup (3.15"x6.5") and Pin (~1.6"x6.5") sizes, Goal heights (8.7/5.8/3.25"), Toggle (25.8" long, 2.05" faces), scoring rules SC1-SC8, rules SG1-SG13, motor rules R10a (88 W) and R11a (55 W drivetrain) | **verified** | Game Manual v2.0 (text). A public copy of the manual text was read; it is not redistributed in this repo (`.refs/` is git-ignored). |
+| Override Goal / Toggle / Loader **positions** on the 24" grid (goals at (+-24,+-48) and (+-48,+-24), tall Goal at the origin, Toggles at the wall centers, Loaders at the walls at y = +-60) | community, three independent sources agree | github.com/wittodetto/MMGA_Override_AutonSim (derived from VEX's official VR field data), github.com/msoe-vex/VEX-AI-Reinforcement-Learning, a team engineering notebook |
+| Override Goal footprint (octagon, 142.5 mm across flats) | community (heights match the manual to 0.1 mm) | MMGA_Override_AutonSim mesh generator |
+| Override Midfield diamond (24" half-diagonal) | community; the two community sources disagree (17" vs 24") | see above |
+| Override **starting positions of Pins and Cups** | community reconstruction of Figure FO-2 (an image); consistent with the manual's counts: 4 red/blue, 8 red/yellow, 8 blue/yellow, 17 yellow/yellow Pins and 24 gray-up + 12 clear-up Cups on the Field | msoe-vex repo; two pins dropped to match the manual's count of 17 yellow/yellow |
+| Override Loader footprint, Load Zone size, Pin physics radius | **assumed** | - |
+| Not readable: Appendix A dimensioned drawings (A5-A17) and Figures FO-1/FO-2 are images | - | Game Manual v2.0 |
 | Push Back: 12'x12', 88 Blocks (3 pts), 2 Long + 2 Center Goals, 15 s auton, 1:45 driver | verified from search of the RECF overview | https://recfoundation.net/documents/2025/06/overview-v5-robotics-competition-push-back.pdf/ |
-| Override: 56 Cups, 63 Pins, 9 Goals, 4 Toggles, 4 Loaders; Pin = 5 pts, yellow Pin = 10; auton +12 | **UNVERIFIED** (search snippets) | Override manual v0.1.2 https://content.vexrobotics.com/docs/2026-2027/override/files/v5rc-override-0.1.2.pdf (blocked from the build environment) |
-| Motor cap 88 W total (R10a), drivetrain 55 W (R11a) | **UNVERIFIED** | same manual |
-| 18" starting size | assumed (long-standing V5RC rule) | manual |
-| High Stakes / Over Under / Spin Up / Tipping Point details | **UNVERIFIED**, recalled; layouts are approximate practice layouts | - |
-| All object positions and scoring zones | **APPROXIMATE practice layouts, not from manuals** | - |
+| High Stakes / Over Under / Spin Up / Tipping Point details, and Push Back/High Stakes object positions | **UNVERIFIED**, approximate practice layouts | - |
 
 ## Hardware constants
 | Item | Status |

@@ -62,6 +62,13 @@ lemlib::Chassis chassis(drivetrain, lateral_controller, angular_controller, sens
 
 ASSET(path_1_txt); // static/path_1.txt
 
+// Mechanism stubs - fill these in with your robot's code.
+// TODO: score the held object onto the Goal in front of the robot (the simulator nests it onto the stack)
+void place_on_goal() {}
+
+// TODO: flip the Toggle in front of the robot to blue
+void set_toggle_blue() {}
+
 void initialize() {
     pros::lcd::initialize();
     chassis.calibrate(); // calibrate sensors
@@ -111,6 +118,8 @@ void autonomous() {
     pros::delay(500);
     clamp_piston.set_value(false);
     // custom code here
+    place_on_goal();
+    set_toggle_blue();
 }
 
 void opcontrol() {

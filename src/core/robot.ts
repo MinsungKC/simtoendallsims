@@ -85,6 +85,8 @@ export interface RobotConfig {
   efficiency: number;
   /** Intake capture zone in front of the robot (robot frame), inches. null = none */
   intake: IntakeSpec | null;
+  /** Tallest stack (pieces) the scoring mechanism can add to. Undefined = unlimited. */
+  maxStack?: number;
 }
 
 export interface IntakeSpec {

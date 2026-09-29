@@ -56,11 +56,23 @@ export function FieldPanel() {
             <>
               <div className="kv"><span>Red</span><b style={{ color: "#e5484d" }}>{sc.red}</b><span>Blue</span><b style={{ color: "#3e8bff" }}>{sc.blue}</b></div>
               {sc.lines.map((l) => <div key={l.label} className="kv"><span>{l.label}</span><b>{l.red} / {l.blue}</b></div>)}
+              {sc.notes?.map((n, i) => <p key={i} className="note">{n}</p>)}
               <p className="note">Counts objects resting in scoring zones at the end of the run. Bonuses, control zones and park are not modelled.</p>
             </>
           ) : <p className="note">Score for custom fields is shown in the top bar.</p>;
         })() : <p className="note">Run the simulation to see the score.</p>}
       </Section>
+
+      {game.provenance && (
+        <Section title="Where the field data comes from" open={false}>
+          {game.provenance.map((p, i) => (
+            <div key={i} className="kv">
+              <Badge kind={p.confidence === "manual" ? "ok" : p.confidence === "community" ? "info" : "warn"}>{p.confidence}</Badge>
+              <span style={{ flex: 1 }}>{p.item} - <em>{p.source}</em></span>
+            </div>
+          ))}
+        </Section>
+      )}
 
       <Section title="Field layout (custom JSON)">
         <p className="note">Objects: {(st.customField?.objects ?? game.objects).length} · Obstacles: {(st.customField?.obstacles ?? game.obstacles).length} · Zones: {(st.customField?.zones ?? game.zones).length} {st.customField && <Badge kind="info">custom</Badge>}</p>

@@ -1,5 +1,7 @@
 import type { GameObject, Team, World } from "../core/world";
 import type { GameModule, ScoreResult, ScoringZone, StartPosition } from "./types";
+import { override } from "./override";
+export { override };
 
 const U = (value: number) => ({ value, verified: false });
 type Obj = GameModule["objects"][number];
@@ -165,49 +167,6 @@ export const pushBack: GameModule = {
   notes: [
     "Verified: 12'x12' field, 88 Blocks worth 3 pts each in Goals, 2 Long + 2 Center Goals, 15 s auton.",
     "APPROXIMATE: goal positions/sizes and block placement are practice values, not from the manual. Zone-control and Park scoring are not modelled.",
-  ],
-};
-
-// ------------------------------------------------------------------------------------ Override (26/27)
-
-nextId = 1;
-const overrideObjects: Obj[] = [];
-// 24 red + 24 blue pins in three rows each, 15 neutral (7 yellow) along the side walls; 56 cups along the far wall
-for (let i = 0; i < 24; i++) {
-  overrideObjects.push(obj("pin", "red", -49 + (i % 8) * 14, 32 + Math.floor(i / 8) * 6, 1.6, 0.05));
-  overrideObjects.push(obj("pin", "blue", -49 + (i % 8) * 14, -32 - Math.floor(i / 8) * 6, 1.6, 0.05));
-}
-for (let i = 0; i < 15; i++) overrideObjects.push(obj(i < 8 ? "pin" : "pin-yellow", "neutral", i < 8 ? -62 : 62, -28 + (i % 8) * 8, 1.6, 0.05));
-for (let i = 0; i < 56; i++) overrideObjects.push(obj("cup", "neutral", -58 + (i % 14) * 8.9, 52 + Math.floor(i / 14) * 4, 2, 0.04));
-const overrideZones: ScoringZone[] = [
-  { id: "tall", label: "Tall Goal", geom: { shape: "circle", x: 0, y: 0, r: 8 }, accepts: ["pin", "pin-yellow"], points: 5, color: "#e2b93b" },
-  ...[[-24, 24], [24, 24], [-24, -24], [24, -24]].map(([x, y], i) => ({ id: `short-${i}`, label: `Short Goal ${i + 1}`, geom: { shape: "circle" as const, x, y, r: 6 }, accepts: ["pin", "pin-yellow"], points: 5, color: "#e2b93b" })),
-];
-export const override: GameModule = {
-  id: "override",
-  name: "Override",
-  season: "2026-27",
-  manualVersion: "0.1.2 (UNVERIFIED - manual could not be read directly)",
-  fieldSize: U(144),
-  autonSeconds: U(15),
-  driverSeconds: U(105),
-  robotRules: { totalCapW: 88, drivetrainCapW: 55, verified: false },
-  startingSize: U(18),
-  layoutApproximate: true,
-  zones: overrideZones,
-  starts: [
-    { label: "Red left", x: -48, y: -58, heading: 0, alliance: "red" },
-    { label: "Red right", x: -24, y: -58, heading: 0, alliance: "red" },
-    { label: "Blue left", x: 24, y: -58, heading: 0, alliance: "blue" },
-    { label: "Blue right", x: 48, y: -58, heading: 0, alliance: "blue" },
-  ],
-  lines: [],
-  objects: overrideObjects,
-  obstacles: [],
-  score: (w) => zoneScore(w, overrideZones),
-  notes: [
-    "Object counts from search snippets of the manual: 56 Cups, 63 Pins, 9 Goals (4 short, 1 tall, 2 red, 2 blue), 4 Toggles, 4 Loaders. Alliance-color Pin = 5 pts.",
-    "UNVERIFIED: 88 W total cap (R10a) and 55 W drivetrain cap (R11a) - check the manual. Toggles, yellow-Pin 10-pt rule, Cups, Loaders and true geometry are NOT modelled. Layout is a practice approximation.",
   ],
 };
 

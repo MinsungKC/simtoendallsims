@@ -27,6 +27,13 @@ void odom_constants() {
   chassis.drive_min_voltage = 0;
 }
 
+// Mechanism stubs - fill these in with your robot's code.
+// TODO: score the held object onto the Goal in front of the robot (the simulator nests it onto the stack)
+void place_on_goal() {}
+
+// TODO: flip the Toggle in front of the robot to blue
+void set_toggle_blue() {}
+
 void auton_1_step2_actions() {
   wait(900, msec); // ~when the simulated robot had traveled 20 (re-time on robot)
   clamp_piston.open();
@@ -66,6 +73,8 @@ void auton_1() {
   wait(500, msec);
   clamp_piston.close();
   // custom code here
+  place_on_goal();
+  set_toggle_blue();
 }
 "
 `;

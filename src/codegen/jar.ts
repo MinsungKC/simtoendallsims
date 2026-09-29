@@ -2,7 +2,7 @@ import { derive } from "../core/robot";
 import { buildPathPoints } from "../core/path";
 import type { ActionSpec, MotionSpec, Step } from "../core/routine";
 import type { Recording } from "../core/runtime";
-import { bearing, describeMotion, ident, indent, num, planPoses, splitActions, speedToVolts, type Planned } from "./common";
+import { bearing, mechanismStubs, describeMotion, ident, indent, num, planPoses, splitActions, speedToVolts, type Planned } from "./common";
 import type { GenInput, GenResult } from "./types";
 
 export const JAR_VERSION = "JAR-Template v1.2.x (VEXcode, github.com/JacksonAreaRobotics/JAR-Template)";
@@ -23,6 +23,8 @@ function actionVex(a: ActionSpec, hasIntake: boolean): string[] {
     case "eject": return hasIntake ? ["intake.spin(reverse, 12, volt);", "wait(250, msec);", "intake.stop();"] : ["// eject (no intake configured)"];
     case "clamp": return ["clamp_piston.open();"];
     case "unclamp": return ["clamp_piston.close();"];
+    case "place": return ["place_on_goal();"];
+    case "toggleSet": return [`set_toggle_${a.arg ?? "red"}();`];
     case "custom": return (a.code ?? "// custom action").split("\n");
   }
 }
@@ -187,6 +189,7 @@ export function generateJar(input: GenInput): GenResult {
 
   const bodyLines: string[] = [];
   routine.steps.forEach((s, i) => bodyLines.push(...indent(stepBody(s, i, before[i]), 2)));
+  A.push(...mechanismStubs(routine));
   A.push(...threadFns);
   A.push(`void ${fn}() {`);
   A.push(usesOdom ? "  odom_constants();" : "  default_constants();");

@@ -1,9 +1,9 @@
 import { derive, IN, type DerivedRobot, type RobotConfig } from "./robot";
 import { defaultEnv, initialState, step as stepRobot, type Environment, type SimState } from "./physics";
-import { aabb, closestOnObb, corners, forwardOf, obbContact, RAD, rightOf, type Obb, type Vec } from "./geometry";
+import { closestOnObb, closestOnPoly, corners, forwardOf, polyContact, rectVerts, RAD, rightOf, type Obb, type Vec } from "./geometry";
 
 export type Team = "red" | "blue" | "neutral";
-export type ObjectState = "field" | "held" | "carried";
+export type ObjectState = "field" | "held" | "carried" | "stacked";
 
 export interface GameObject {
   id: number;
@@ -24,6 +24,14 @@ export interface GameObject {
   carriable?: boolean;
   /** Fixed in place (stakes etc.) - never moves */
   fixed?: boolean;
+  /** Two-colored objects (Override Pins): colors of the two halves */
+  halves?: [string, string];
+  /** Which half sits in the lower socket when placed: false = halves[0] */
+  flip?: boolean;
+  /** Override Cups: the opaque half is the upper socket */
+  opaqueUp?: boolean;
+  /** Starts the match held by the robot (a Preload) */
+  held?: boolean;
 }
 
 export interface Obstacle {
@@ -32,6 +40,64 @@ export interface Obstacle {
   w: number;
   h: number;
   label: string;
+  /** Convex polygon (CCW or CW). When present it replaces the x/y/w/h rectangle for collisions. */
+  verts?: Vec[];
+  /** e.g. "goal:tall-0", "loader", "toggle" - lets rule checks tell obstacles apart */
+  tag?: string;
+}
+
+export function obstaclePoly(o: Obstacle): Vec[] {
+  return o.verts ?? rectVerts(o.x, o.y, o.w, o.h);
+}
+
+export interface StackItem {
+  id: number;
+  kind: string;
+  halves?: [string, string];
+  opaqueUp?: boolean;
+  /** For pins: which half sits lower in the stack */
+  flip?: boolean;
+}
+
+/** A receptacle that objects can be nested into and stacked on (Override Goals). */
+export interface GoalState {
+  id: string;
+  x: number;
+  y: number;
+  /** game-specific type, e.g. "tall" | "short" | "alliance" */
+  kind: string;
+  alliance?: "red" | "blue";
+  /** Height of the goal rim, in */
+  height: number;
+  /** Placement reach: how close the robot's front must be to place onto it, in */
+  reach: number;
+  stack: StackItem[];
+}
+
+export interface ToggleState {
+  id: string;
+  x: number;
+  y: number;
+  wall: "N" | "E" | "S" | "W";
+  state: "yellow" | "red" | "blue";
+}
+
+export interface WorldEvent {
+  t: number;
+  type: "place" | "toggle" | "pickup" | "reject";
+  id?: number;
+  goal?: string;
+  toggle?: string;
+  color?: string;
+  text?: string;
+}
+
+/** Game-specific rules the generic engine calls into. */
+export interface GameRules {
+  /** Can `item` be added on top of this goal's current stack? */
+  canStack(goal: GoalState, item: GameObject): boolean;
+  /** Max held objects per kind (Override: 1 pin + 1 cup). Kinds not listed are unlimited. */
+  possession?: Record<string, number>;
 }
 
 export interface MechState {
@@ -45,6 +111,13 @@ export interface World {
   robot: SimState;
   objects: GameObject[];
   obstacles: Obstacle[];
+  goals: GoalState[];
+  toggles: ToggleState[];
+  events: WorldEvent[];
+  rules?: GameRules;
+  alliance: "red" | "blue";
+  /** Half extents of the robot footprint (for scoring / rule checks) */
+  robotBox: { hl: number; hw: number };
   held: number[];
   mech: MechState;
   env: Environment;
@@ -56,15 +129,25 @@ export interface WorldInit {
   fieldSize: number;
   objects: Omit<GameObject, "vx" | "vy" | "state">[];
   obstacles: Obstacle[];
+  goals?: Omit<GoalState, "stack">[];
+  toggles?: ToggleState[];
+  rules?: GameRules;
 }
 
 export function createWorld(init: WorldInit, start: { x: number; y: number; heading: number }): World {
+  const objects = init.objects.map((o) => ({ ...o, vx: 0, vy: 0, state: o.held ? ("held" as const) : ("field" as const) }));
   return {
     t: 0,
     robot: initialState(start.x, start.y, start.heading),
-    objects: init.objects.map((o) => ({ ...o, vx: 0, vy: 0, state: "field" as const })),
+    objects,
     obstacles: init.obstacles.map((o) => ({ ...o })),
-    held: [],
+    goals: (init.goals ?? []).map((g) => ({ ...g, stack: [] })),
+    toggles: (init.toggles ?? []).map((t) => ({ ...t })),
+    events: [],
+    rules: init.rules,
+    alliance: "red",
+    robotBox: { hl: 7.5, hw: 7.5 },
+    held: objects.filter((o) => o.held).map((o) => o.id),
     mech: { intake: 0, clamp: false },
     env: { ...defaultEnv, fieldSize: init.fieldSize },
     contacts: 0,
@@ -147,7 +230,7 @@ function resolveRobotStatics(w: World, cfg: RobotConfig, d: DerivedRobot): void 
       if (c.y < -half) { w.robot = staticContact(w.robot, cfg, d, c.x, c.y, 0, 1, -half - c.y); w.contacts++; }
     }
     for (const o of w.obstacles) {
-      const m = obbContact(robotObb(w.robot, cfg), aabb(o.x, o.y, o.w, o.h));
+      const m = polyContact(corners(robotObb(w.robot, cfg)), obstaclePoly(o));
       if (m) { w.robot = staticContact(w.robot, cfg, d, m.px, m.py, m.nx, m.ny, m.depth); w.contacts++; }
     }
   }
@@ -172,24 +255,35 @@ function resolveObjects(w: World, cfg: RobotConfig, d: DerivedRobot, dt: number)
     if (o.x - o.r < -half) { o.x = -half + o.r; o.vx = Math.abs(o.vx) * 0.3; }
     if (o.y + o.r > half) { o.y = half - o.r; o.vy = -Math.abs(o.vy) * 0.3; }
     if (o.y - o.r < -half) { o.y = -half + o.r; o.vy = Math.abs(o.vy) * 0.3; }
-    // static obstacles
+    // static obstacles (any convex polygon)
     for (const ob of w.obstacles) {
-      const box = aabb(ob.x, ob.y, ob.w, ob.h);
-      const cp = closestOnObb(box, o.x, o.y);
+      const poly = obstaclePoly(ob);
+      const cp = closestOnPoly(poly, o.x, o.y);
       let dx = o.x - cp.x, dy = o.y - cp.y;
       const dist = Math.hypot(dx, dy);
       if (cp.inside || dist < o.r) {
         if (cp.inside || dist < 1e-6) {
-          // push out through the nearest face
-          const px = ob.w / 2 - Math.abs(o.x - ob.x), py = ob.h / 2 - Math.abs(o.y - ob.y);
-          if (px < py) { dx = Math.sign(o.x - ob.x) || 1; dy = 0; o.x = ob.x + dx * (ob.w / 2 + o.r); }
-          else { dx = 0; dy = Math.sign(o.y - ob.y) || 1; o.y = ob.y + dy * (ob.h / 2 + o.r); }
+          // centre is inside: push out through the nearest edge
+          let bestD = Infinity, bn = { x: 1, y: 0 }, bp = { x: o.x, y: o.y };
+          for (let k = 0; k < poly.length; k++) {
+            const a = poly[k], b = poly[(k + 1) % poly.length];
+            const ex = b.x - a.x, ey = b.y - a.y;
+            const len = Math.hypot(ex, ey) || 1;
+            let nx = ey / len, ny = -ex / len;
+            const c = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+            const ctr = poly.reduce((acc, q) => ({ x: acc.x + q.x / poly.length, y: acc.y + q.y / poly.length }), { x: 0, y: 0 });
+            if ((c.x - ctr.x) * nx + (c.y - ctr.y) * ny < 0) { nx = -nx; ny = -ny; }
+            const d = Math.abs((o.x - a.x) * nx + (o.y - a.y) * ny);
+            if (d < bestD) { bestD = d; bn = { x: nx, y: ny }; bp = { x: o.x + nx * d, y: o.y + ny * d }; }
+          }
+          dx = bn.x; dy = bn.y;
+          o.x = bp.x + dx * o.r; o.y = bp.y + dy * o.r;
         } else {
           dx /= dist; dy /= dist;
           o.x = cp.x + dx * o.r; o.y = cp.y + dy * o.r;
         }
         const vn = o.vx * dx + o.vy * dy;
-        if (vn < 0) { o.vx -= (1.3) * vn * dx; o.vy -= (1.3) * vn * dy; }
+        if (vn < 0) { o.vx -= 1.3 * vn * dx; o.vy -= 1.3 * vn * dy; }
       }
     }
     // robot vs object (two-body impulse; the object is a point mass with no spin)
@@ -288,15 +382,89 @@ function updateMechanisms(w: World, cfg: RobotConfig): void {
       hw: cfg.intake.width / 2,
     };
     for (const o of w.objects) {
-      if (w.held.length >= cfg.intake.capacity) break;
       if (o.state !== "field" || o.carriable || o.fixed) continue;
+      if (!canHold(w, cfg, o.kind)) continue;
       if (closestOnObb(zone, o.x, o.y).inside) {
         o.state = "held";
         w.held.push(o.id);
+        w.events.push({ t: w.t, type: "pickup", id: o.id });
       }
     }
   }
   if (w.mech.intake < 0 && cfg.intake) ejectHeld(w, cfg, 1);
+}
+
+function heldOfKind(w: World, kind: string): number {
+  return w.held.reduce((n, id) => n + (w.objects.find((o) => o.id === id)?.kind === kind ? 1 : 0), 0);
+}
+
+/** Intake capacity check: overall capacity plus the game's per-kind possession limits (Override SG6). */
+export function canHold(w: World, cfg: RobotConfig, kind: string): boolean {
+  if (!cfg.intake) return false;
+  if (w.held.length >= cfg.intake.capacity) return false;
+  const lim = w.rules?.possession?.[kind];
+  return lim === undefined || heldOfKind(w, kind) < lim;
+}
+
+/** Robot front-center point (where mechanisms interact with the field). */
+export function frontPoint(w: World, cfg: RobotConfig): Vec {
+  const f = forwardOf(w.robot.heading);
+  return { x: w.robot.x + f.x * (cfg.length / 2), y: w.robot.y + f.y * (cfg.length / 2) };
+}
+
+/**
+ * Place one held object onto the goal in front of the robot (nest it into / onto the stack). Returns a
+ * human-readable failure reason, or null on success. Which object is tried first: `prefer` kind, then held order.
+ */
+export function placeHeld(w: World, cfg: RobotConfig, prefer?: string): string | null {
+  if (w.held.length === 0) return "nothing held to place";
+  const fp = frontPoint(w, cfg);
+  const f = forwardOf(w.robot.heading);
+  let goal: GoalState | null = null, gd = Infinity;
+  for (const g of w.goals) {
+    const d = Math.hypot(g.x - fp.x, g.y - fp.y);
+    const ahead = (g.x - w.robot.x) * f.x + (g.y - w.robot.y) * f.y;
+    if (d <= g.reach && ahead > 0 && d < gd) { goal = g; gd = d; }
+  }
+  if (!goal) { w.events.push({ t: w.t, type: "reject", text: "no goal within reach in front of the robot" }); return "no goal within reach in front of the robot"; }
+  if (goal.alliance && goal.alliance !== w.alliance) { w.events.push({ t: w.t, type: "reject", goal: goal.id, text: "opposing Alliance Goal (SG9)" }); return `that is the opposing Alliance's Goal (rule SG9)`; }
+  if (cfg.maxStack !== undefined && goal.stack.length >= cfg.maxStack) { w.events.push({ t: w.t, type: "reject", goal: goal.id, text: "stack taller than the robot can reach" }); return "the stack is taller than the robot can reach"; }
+  const order = [...w.held].sort((a, b) => {
+    const ka = w.objects.find((o) => o.id === a)?.kind === prefer ? 0 : 1;
+    const kb = w.objects.find((o) => o.id === b)?.kind === prefer ? 0 : 1;
+    return ka - kb;
+  });
+  for (const id of order) {
+    const o = w.objects.find((q) => q.id === id)!;
+    if (w.rules && !w.rules.canStack(goal, o)) continue;
+    goal.stack.push({ id: o.id, kind: o.kind, halves: o.halves, opaqueUp: o.opaqueUp, flip: o.flip });
+    o.state = "stacked";
+    o.x = goal.x; o.y = goal.y; o.vx = 0; o.vy = 0;
+    w.held = w.held.filter((h) => h !== id);
+    w.events.push({ t: w.t, type: "place", id: o.id, goal: goal.id });
+    return null;
+  }
+  w.events.push({ t: w.t, type: "reject", goal: goal.id, text: "the held object cannot go on this stack" });
+  return "the held object cannot go on this stack (a Pin goes in an empty Goal or a Cup's open socket; a Cup goes over a Pin)";
+}
+
+/** Set the Toggle nearest the robot's front to a color. Returns a failure reason or null. */
+export function setToggle(w: World, cfg: RobotConfig, color: "yellow" | "red" | "blue"): string | null {
+  const fp = frontPoint(w, cfg);
+  let best: ToggleState | null = null, bd = Infinity;
+  for (const t of w.toggles) {
+    // toggles are 25.8 in bars along a wall: distance to the bar's segment
+    const half = 12.9;
+    const along = t.wall === "N" || t.wall === "S" ? { x: 1, y: 0 } : { x: 0, y: 1 };
+    const px = fp.x - t.x, py = fp.y - t.y;
+    const proj = Math.max(-half, Math.min(half, px * along.x + py * along.y));
+    const d = Math.hypot(px - along.x * proj, py - along.y * proj);
+    if (d < bd) { bd = d; best = t; }
+  }
+  if (!best || bd > 6) { w.events.push({ t: w.t, type: "reject", text: "no Toggle within reach" }); return "no Toggle within reach of the robot's front"; }
+  best.state = color;
+  w.events.push({ t: w.t, type: "toggle", toggle: best.id, color });
+  return null;
 }
 
 /** Release up to `count` held objects out the front of the robot. */

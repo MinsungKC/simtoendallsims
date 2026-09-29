@@ -3,7 +3,7 @@ import { LemLibOdom, SensorSuite, type Pose } from "./odom";
 import * as L from "./lemlib";
 import { buildPathPoints } from "./path";
 import type { ActionSpec, MotionSpec, Routine, Step } from "./routine";
-import { createWorld, ejectHeld, setClamp, stepWorld, type World, type WorldInit } from "./world";
+import { createWorld, ejectHeld, placeHeld, setClamp, setToggle, stepWorld, type World, type WorldInit, type WorldEvent } from "./world";
 import type { SimState } from "./physics";
 
 export const PHYSICS_DT = 0.005;
@@ -20,7 +20,7 @@ export interface Frame {
   battery: number; current: number;
   slip: boolean;
   step: number;
-  /** flattened [x, y, stateCode] per object; state 0 field, 1 held, 2 carried */
+  /** flattened [x, y, stateCode] per object; state 0 field, 1 held, 2 carried, 3 stacked in a Goal */
   objs: number[];
   held: number;
 }
@@ -29,6 +29,7 @@ export interface Warning {
   t: number;
   step: number;
   text: string;
+  level?: "error" | "warn";
 }
 
 export interface StepTiming { index: number; start: number; end: number; timedOut: boolean }
@@ -44,6 +45,8 @@ export interface Recording {
   contacts: number;
   /** final world (objects) for scoring */
   world: World;
+  /** pickups, placements, toggle changes and rejected actions, in time order */
+  events: WorldEvent[];
 }
 
 export interface RunOptions {
@@ -66,6 +69,8 @@ export function simulate(routine: Routine, cfg: RobotConfig, init: WorldInit, op
   const d = derive(cfg);
   const pe = opts.placementError ?? { x: 0, y: 0, heading: 0 };
   const world = createWorld(init, { x: routine.start.x + pe.x, y: routine.start.y + pe.y, heading: routine.start.heading + pe.heading });
+  world.alliance = routine.alliance;
+  world.robotBox = { hl: cfg.length / 2, hw: cfg.width / 2 };
   const grip = cfg.grip ?? 1;
   world.env = {
     ...world.env,
@@ -107,7 +112,7 @@ export function simulate(routine: Routine, cfg: RobotConfig, init: WorldInit, op
     const s = world.robot;
     const est = odom.getPose();
     const objs: number[] = [];
-    for (const o of world.objects) objs.push(o.x, o.y, o.state === "field" ? 0 : o.state === "held" ? 1 : 2);
+    for (const o of world.objects) objs.push(o.x, o.y, o.state === "field" ? 0 : o.state === "held" ? 1 : o.state === "carried" ? 2 : 3);
     frames.push({
       t: world.t, x: s.x, y: s.y, heading: s.heading, vx: s.vx, vy: s.vy, w: s.w,
       ex: est.x, ey: est.y, etheta: est.theta,
@@ -135,6 +140,16 @@ export function simulate(routine: Routine, cfg: RobotConfig, init: WorldInit, op
       case "intakeOut": world.mech.intake = -1; break;
       case "intakeStop": world.mech.intake = 0; break;
       case "eject": ejectHeld(world, cfg, 1); break;
+      case "place": {
+        const why = placeHeld(world, cfg, a.arg && a.arg !== "any" ? a.arg : undefined);
+        if (why) warnings.push({ t: world.t, step: stepIdx, text: `Place failed: ${why}` });
+        break;
+      }
+      case "toggleSet": {
+        const why = setToggle(world, cfg, (a.arg as "red" | "blue" | "yellow") ?? routine.alliance);
+        if (why) warnings.push({ t: world.t, step: stepIdx, text: `Toggle failed: ${why}` });
+        break;
+      }
       case "clamp": delayed.push({ fireAt: world.t + clampDelay, fn: () => setClamp(world, cfg, true) }); break;
       case "unclamp": setClamp(world, cfg, false); break;
       case "custom": break; // user code: not simulated
@@ -220,7 +235,7 @@ export function simulate(routine: Routine, cfg: RobotConfig, init: WorldInit, op
   if (frames.length && frames[frames.length - 1].t > 15.001) {
     warnings.push({ t: 15, step: -1, text: `Routine runs ${frames[frames.length - 1].t.toFixed(1)} s - autonomous period is 15 s` });
   }
-  return { frames, warnings, steps: timings, triggers, duration: world.t, contacts: world.contacts, world };
+  return { frames, warnings, steps: timings, triggers, duration: world.t, contacts: world.contacts, world, events: world.events };
 }
 
 function describeTrigger(t: ActionSpec["when"]): string {

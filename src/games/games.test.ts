@@ -15,8 +15,9 @@ describe("game modules", () => {
     expect(highStakes.objects.filter((o) => o.kind === "ring")).toHaveLength(48);
     expect(highStakes.objects.filter((o) => o.kind === "mobile-goal")).toHaveLength(5);
     expect(pushBack.objects.filter((o) => o.kind === "block")).toHaveLength(88);
-    expect(override.objects.filter((o) => o.kind.startsWith("pin"))).toHaveLength(63);
-    expect(override.objects.filter((o) => o.kind === "cup")).toHaveLength(56);
+    // on-field starting objects only: Match Loads (20 cups, 22 pins) and Preloads (4 pins) start off the Field
+    expect(override.objects.filter((o) => o.kind === "pin")).toHaveLength(37);
+    expect(override.objects.filter((o) => o.kind === "cup")).toHaveLength(36);
   });
   it("all objects start inside the field and don't overlap the start positions", () => {
     for (const g of games) {
@@ -31,7 +32,8 @@ describe("game modules", () => {
   });
   it("nothing starts inside a scoring zone (score is 0 at the whistle)", () => {
     for (const g of games) {
-      const w = createWorld(worldInit(g), { x: 0, y: 0, heading: 0 });
+      const st = g.starts[0];
+      const w = createWorld(worldInit(g), { x: st.x, y: st.y, heading: st.heading });
       const sc = g.score(w);
       expect({ game: g.id, red: sc.red, blue: sc.blue }).toEqual({ game: g.id, red: 0, blue: 0 });
     }

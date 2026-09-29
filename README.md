@@ -22,8 +22,9 @@ npm run build
   autosave, save/open project files.
 - **Simulation**: LemLib's control algorithms run against the physics with noisy odometry. Timeline scrubbing, speed/odometry-error/
   battery charts, warnings (timeouts, unreachable triggers, over 15 s), placement-error testing, auto-tuned starting gains.
-- **Games**: Override (2026-27), Push Back, High Stakes, older-season stubs, blank field. **Layouts are approximate practice layouts
-  and are flagged as such** - edit or import a corrected field JSON.
+- **Games**: **Override (2026-27) is modelled from the game manual** - octagonal Goals, Toggles, Loaders with real collisions, Pins and Cups
+  that nest and stack, Toggle ownership, Midfield, Autonomous Win Point and rule checks (`docs/OVERRIDE.md`). Push Back and High Stakes are
+  approximate practice layouts; older seasons are stubs; blank field. Anything not read from a manual is flagged in the UI.
 - **Code**: see `docs/ADDING_A_TEMPLATE.md` for how each target is verified.
 
 ## Honest limits

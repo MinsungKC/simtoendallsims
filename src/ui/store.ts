@@ -142,6 +142,31 @@ function initial(): Pick<Store, "robot" | "ports" | "routine" | "routines" | "ac
   return base;
 }
 
+/**
+ * A short Override auton that uses the real mechanics (red side, West quadrant): nest the Preload Pin in the short Goal,
+ * grab a Cup from the wall stack, stack it over the Pin, then flip the West Toggle to red so the Pin's yellow half is Owned.
+ */
+export function overrideDemo(alliance: "red" | "blue" = "red"): Routine {
+  const at = (x: number, y: number, heading = 0) => ({ x, y, heading });
+  const mv = (type: MotionSpec["type"], p: { x: number; y: number; heading: number }, patch: object = {}) => ({ ...defaultMotion(type, p), ...patch }) as MotionSpec;
+  const a = (type: ActionSpec["type"], when: ActionSpec["when"], arg?: string): ActionSpec => ({ id: uid("a"), type, when, arg });
+  const r: Routine = {
+    name: "Override demo",
+    gameId: "override",
+    alliance: "red",
+    start: at(-64.5, 44, 180),
+    steps: [
+      { id: uid(), motion: mv("moveToPoint", at(-59, 24.5), { timeout: 3000 }), actions: [] },
+      { id: uid(), motion: mv("turnToHeading", at(0, 0, 90)), actions: [a("place", { kind: "end" })] },
+      { id: uid(), motion: mv("turnToHeading", at(0, 0, 270)), actions: [a("intakeIn", { kind: "start" })] },
+      { id: uid(), motion: mv("turnToHeading", at(0, 0, 90)), actions: [a("intakeStop", { kind: "end" }), a("place", { kind: "end" }, "cup")] },
+      { id: uid(), motion: mv("moveToPoint", at(-59, 6), { timeout: 3000 }), actions: [] },
+      { id: uid(), motion: mv("turnToHeading", at(0, 0, 270)), actions: [a("toggleSet", { kind: "end" }, "red")] },
+    ],
+  };
+  return alliance === "red" ? r : mirrorRoutine(r);
+}
+
 export function demoRoutine(): Routine {
   const at = (x: number, y: number, heading = 0) => ({ x, y, heading });
   const mv = (type: MotionSpec["type"], p: { x: number; y: number; heading: number }, patch: object = {}) => ({ ...defaultMotion(type, p), ...patch }) as MotionSpec;
@@ -242,7 +267,14 @@ export const useStore = create<Store>((set, get) => {
     setGame: (gameId) => {
       const g = games.find((x) => x.id === gameId) ?? games[0];
       const first = g.starts.find((s) => s.alliance === get().routine.alliance) ?? g.starts[0];
-      set((s) => ({ gameId, customField: null, routine: { ...s.routine, gameId, start: first ? { x: first.x, y: first.y, heading: first.heading } : s.routine.start } }));
+      const cur = get().routine;
+      const isDefault = cur.steps.length === 0 || cur.name === "Demo auton";
+      if (gameId === "override" && isDefault) {
+        pushHistory();
+        set({ gameId, customField: null, routine: overrideDemo("red"), selected: null });
+      } else {
+        set((s) => ({ gameId, customField: null, routine: { ...s.routine, gameId, start: first ? { x: first.x, y: first.y, heading: first.heading } : s.routine.start } }));
+      }
       changed();
     },
     setTarget: (target) => { set({ target }); persist(get()); },
@@ -350,10 +382,13 @@ export const useStore = create<Store>((set, get) => {
     runSim: () => {
       const s = get();
       const g = s.game();
-      const init = worldInit(g);
-      const world = s.customField ? { ...init, objects: s.customField.objects, obstacles: s.customField.obstacles } : init;
+      const init = worldInit(g, s.routine.alliance);
+      const world = s.customField ? { ...init, objects: [...s.customField.objects, ...init.objects.filter((o) => o.held)], obstacles: s.customField.obstacles } : init;
       const t0 = performance.now();
       const recording = simulate(s.routine, s.robot, world, { seed: s.simOpts.seed, placementError: s.simOpts.placementError });
+      if (g.check) {
+        for (const f of g.check({ routine: s.routine, cfg: s.robot, recording, world: recording.world })) recording.warnings.push({ t: 0, step: f.step ?? -1, text: f.text, level: f.level });
+      }
       set({ recording, simMs: performance.now() - t0, time: Math.min(get().time, recording.duration) });
     },
     setTime: (time) => set({ time }),

@@ -74,7 +74,7 @@ export function App() {
   }, [routine, robot, game, st.customField]);
   const warnings = [
     ...pre.map((p) => ({ t: 0, step: p.step ?? -1, text: p.text, level: p.level })),
-    ...(recording?.warnings ?? []).map((w) => ({ ...w, level: "warn" as const })),
+    ...(recording?.warnings ?? []).map((w) => ({ ...w, level: w.level ?? ("warn" as const) })),
   ];
   const errors = warnings.filter((w) => w.level === "error").length;
   const autonLimit = game.autonSeconds.value;

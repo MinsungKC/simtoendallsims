@@ -12,7 +12,7 @@ const MOTION_LABEL: Record<MotionSpec["type"], string> = {
 };
 
 const ACTION_LABEL: Record<ActionType, string> = {
-  intakeIn: "Intake in", intakeOut: "Intake out", intakeStop: "Intake stop", clamp: "Clamp", unclamp: "Unclamp", eject: "Eject", custom: "Custom code",
+  intakeIn: "Intake in", intakeOut: "Intake out", intakeStop: "Intake stop", clamp: "Clamp", unclamp: "Unclamp", eject: "Eject", place: "Place held object on Goal", toggleSet: "Set Toggle", custom: "Custom code",
 };
 
 const TOOLS: { id: Tool; label: string; hint: string }[] = [
@@ -222,6 +222,8 @@ function ActionsEditor({ step }: { step: Step }) {
             <button onClick={() => st.removeAction(step.id, a.id)}>✕</button>
           </div>
           <TriggerEditor trigger={a.when} isTurn={isTurn} onChange={(when) => st.updateAction(step.id, a.id, { when })} />
+          {a.type === "place" && <Sel label="Prefer" value={a.arg ?? "any"} options={[{ value: "any", label: "whichever fits" }, { value: "pin", label: "Pin first" }, { value: "cup", label: "Cup first" }]} onChange={(v) => st.updateAction(step.id, a.id, { arg: v })} />}
+          {a.type === "toggleSet" && <Sel label="Set to" value={a.arg ?? "red"} options={[{ value: "red", label: "red" }, { value: "blue", label: "blue" }, { value: "yellow", label: "yellow (neutral)" }]} onChange={(v) => st.updateAction(step.id, a.id, { arg: v })} />}
           {a.type === "custom" && <textarea rows={3} value={a.code ?? ""} onChange={(e) => st.updateAction(step.id, a.id, { code: e.target.value })} />}
           {(a.type === "intakeIn" || a.type === "intakeOut" || a.type === "intakeStop" || a.type === "eject") && !hasIntake && <p className="bad">No intake configured on the robot.</p>}
         </div>
