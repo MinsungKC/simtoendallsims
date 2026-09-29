@@ -99,11 +99,13 @@ export interface ToggleState {
 
 export interface WorldEvent {
   t: number;
-  type: "place" | "toggle" | "pickup" | "reject" | "tip";
+  type: "place" | "toggle" | "pickup" | "reject" | "tip" | "hit";
   id?: number;
   goal?: string;
   toggle?: string;
   color?: string;
+  x?: number;
+  y?: number;
   text?: string;
 }
 
@@ -268,6 +270,26 @@ function staticContact(s: SimState, cfg: RobotConfig, d: DerivedRobot, px: numbe
   return { ...out, x: out.x + nx * depth * 0.9, y: out.y + ny * depth * 0.9 };
 }
 
+function noteReject(w: World, key: string, text: string): void {
+  let m = lastHit.get(w);
+  if (!m) { m = new Map(); lastHit.set(w, m); }
+  const t0 = m.get(key);
+  if (t0 !== undefined && w.t - t0 < 1.5) return;
+  m.set(key, w.t);
+  w.events.push({ t: w.t, type: "reject", text });
+}
+
+const lastHit = new WeakMap<object, Map<string, number>>();
+/** Log the robot running into something (once per 0.4 s per thing) so routes can be checked and repaired. */
+function noteHit(w: World, key: string, label: string, x: number, y: number, id?: number): void {
+  let m = lastHit.get(w);
+  if (!m) { m = new Map(); lastHit.set(w, m); }
+  const t0 = m.get(key);
+  if (t0 !== undefined && w.t - t0 < 0.4) return;
+  m.set(key, w.t);
+  w.events.push({ t: w.t, type: "hit", text: label, id, x, y });
+}
+
 function resolveRobotStatics(w: World, cfg: RobotConfig, d: DerivedRobot): void {
   const half = w.env.fieldSize / 2;
   for (let iter = 0; iter < 3; iter++) {
@@ -281,7 +303,7 @@ function resolveRobotStatics(w: World, cfg: RobotConfig, d: DerivedRobot): void 
     for (const o of w.obstacles) {
       for (const pc of robotPieces(w.robot, cfg)) {
         const m = polyContact(corners(pc), obstaclePoly(o));
-        if (m) { w.robot = staticContact(w.robot, cfg, d, m.px, m.py, m.nx, m.ny, m.depth); w.contacts++; }
+        if (m) { w.robot = staticContact(w.robot, cfg, d, m.px, m.py, m.nx, m.ny, m.depth); w.contacts++; if (m.depth > 0.05) noteHit(w, `o:${o.label}`, o.label, m.px, m.py); }
       }
     }
   }
@@ -498,6 +520,7 @@ function resolveRobotObject(w: World, cfg: RobotConfig, d: DerivedRobot, o: Game
   const vox = o.vx * IN - ow * ory, voy = o.vy * IN + ow * orx;
   const vn = (vox - vrx) * nx + (voy - vry) * ny; // object relative to robot along n
   if (vn >= 0) return; // separating
+  if (-vn / IN > 8) noteHit(w, `p:${o.id}`, o.kind, cx, cy, o.id);
   const rn = rx * ny - ry * nx;
   const mo = o.fixed ? 1e9 : o.mass;
   const Io = o.lying ? o.mass * (Math.pow(2 * (o.half ?? 0) + 2 * o.r, 2) * IN * IN / 12 + (o.r * o.r * IN * IN) / 4) : Infinity;
@@ -548,19 +571,22 @@ function updateMechanisms(w: World, cfg: RobotConfig): void {
       hl: zn.spec.reach / 2,
       hw: zn.spec.width / 2,
     };
+    const zname = zn.dir > 0 ? "front" : "back";
     for (const o of w.objects) {
       if (o.state !== "field" || o.carriable || o.fixed) continue;
-      if (!zoneTakes(zn.spec, !!o.lying)) continue; // e.g. a rear roller that only takes standing pieces ignores a pin lying on its side
-      if (!canHold(w, cfg, o.kind)) continue;
+      if (!closestOnObb(zone, o.x, o.y).inside) continue;
       const inner = w.objects.find((q) => q.state === "nested" && q.nestedIn === o.id);
-      if (inner && (!canHold(w, cfg, inner.kind) || w.held.length + 2 > maxHold(cfg))) continue; // a Cup with a Pin in it needs room for both
-      if (closestOnObb(zone, o.x, o.y).inside) {
-        o.state = "held";
-        if (o.lying) o.lying = false;
-        w.held.push(o.id);
-        w.events.push({ t: w.t, type: "pickup", id: o.id });
-        if (inner) { inner.state = "held"; inner.nestedIn = undefined; w.held.push(inner.id); w.events.push({ t: w.t, type: "pickup", id: inner.id }); }
-      }
+      // say why when a piece is sitting in the pickup zone but is not taken (otherwise it just looks broken)
+      let why: string | null = null;
+      if (!zoneTakes(zn.spec, !!o.lying)) why = `the ${zname} pickup only takes ${o.lying ? "standing" : "lying"} pieces and this ${o.kind} is ${o.lying ? "lying" : "standing"}`;
+      else if (!canHold(w, cfg, o.kind)) why = w.held.length >= maxHold(cfg) ? "the robot is full" : `the robot can only hold ${w.rules?.possession?.[o.kind] ?? "so many"} ${o.kind}${(w.rules?.possession?.[o.kind] ?? 2) === 1 ? "" : "s"} (it already holds one - score it first)`;
+      else if (inner && (!canHold(w, cfg, inner.kind) || w.held.length + 2 > maxHold(cfg))) why = `this ${o.kind} has a ${inner.kind} standing in it and the robot has no room for both (score what it holds first)`;
+      if (why) { noteReject(w, `r:${o.id}`, `pick up the ${o.kind} with the ${zname} pickup: ${why}`); continue; }
+      o.state = "held";
+      if (o.lying) o.lying = false;
+      w.held.push(o.id);
+      w.events.push({ t: w.t, type: "pickup", id: o.id });
+      if (inner) { inner.state = "held"; inner.nestedIn = undefined; w.held.push(inner.id); w.events.push({ t: w.t, type: "pickup", id: inner.id }); }
     }
   }
   if (w.mech.intake < 0 && cfg.intake) ejectHeld(w, cfg, 1);

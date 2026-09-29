@@ -49,3 +49,18 @@ describe("simple mode", () => {
     expect(out.steps.at(-1)!.actions).toHaveLength(1);
   });
 });
+
+describe("fix by simulation", () => {
+  it("re-routes a leg that really drives into a Goal until the run is clean", async () => {
+    const { repairBySim, routeHits } = await import("./repair");
+    const { simulate } = await import("./runtime");
+    const g: Obstacle = { x: 0, y: 0, w: 5.6, h: 5.6, label: "g", tag: "goal:g" };
+    const init = { fieldSize: 144, objects: [], obstacles: [g] };
+    const r = route([{ id: "a", motion: { ...defaultMotion("moveToPoint", { x: 40, y: 0, heading: 0 }), timeout: 5000 } as never, actions: [] }]);
+    const sim = (x: Routine) => simulate(x, cfg, init);
+    expect(routeHits(sim(r)).length).toBeGreaterThan(0);
+    const res = await repairBySim(r, cfg, DEFAULT_AVOID, 144, sim, [g], []);
+    expect(res.remaining).toEqual([]);
+    expect(routeHits(sim(res.routine))).toEqual([]);
+  }, 60000);
+});

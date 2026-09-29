@@ -48,7 +48,19 @@ export function avoidObstacles(path: Vec[], o: Pick<AutoRouteOptions, "obstacles
           for (let t = 0; t < 60; t += 0.25) { const q = { x: p.x + nx * t, y: p.y + ny * t }; out = q; if (!closestOnPoly(poly, q.x, q.y).inside) break; }
           p.x = out.x + nx * clearance; p.y = out.y + ny * clearance;
         } else {
-          p.x = cp.x + (dx / d) * clearance; p.y = cp.y + (dy / d) * clearance;
+          // a point on (or close to) the line through the obstacle's middle would just slide along the path when pushed radially:
+          // send it sideways instead, to the side it already leans toward
+          const a0 = pts[Math.max(0, i - 1)], b0 = pts[Math.min(pts.length - 1, i + 1)];
+          let tx = b0.x - a0.x, ty = b0.y - a0.y;
+          const tl = Math.hypot(tx, ty) || 1; tx /= tl; ty /= tl;
+          const cx0 = poly.reduce((acc, q) => acc + q.x, 0) / poly.length, cy0 = poly.reduce((acc, q) => acc + q.y, 0) / poly.length;
+          const lateral = (p.x - cx0) * -ty + (p.y - cy0) * tx;
+          if (Math.abs(lateral) < clearance * 0.5) {
+            const sg = lateral < 0 ? -1 : 1;
+            let out = { x: p.x, y: p.y };
+            for (let t = 0; t < 60; t += 0.25) { const q = { x: p.x - ty * sg * t, y: p.y + tx * sg * t }; out = q; if (closestOnPoly(poly, q.x, q.y).inside === false && dist(q, closestOnPoly(poly, q.x, q.y)) >= clearance) break; }
+            p.x = out.x; p.y = out.y;
+          } else { p.x = cp.x + (dx / d) * clearance; p.y = cp.y + (dy / d) * clearance; }
         }
       }
       p.x = Math.max(-lim, Math.min(lim, p.x)); p.y = Math.max(-lim, Math.min(lim, p.y));

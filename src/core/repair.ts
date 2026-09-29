@@ -81,3 +81,62 @@ export function repairRoutine(r: Routine, cfg: RobotConfig, obstacles: Obstacle[
   });
   return { routine: { ...r, steps }, changed };
 }
+
+export interface RouteHit { step: number; t: number; label: string; id?: number; x: number; y: number }
+
+/** Unintended contacts in a finished run: what the robot ran into, and in which step. Pieces it went on to pick up, and Goals it then scored in, are intended. */
+export function routeHits(rec: import("./runtime").Recording): RouteHit[] {
+  const out: RouteHit[] = [];
+  const pickups = rec.events.filter((q) => q.type === "pickup").map((q) => { const f = rec.frames.find((x) => x.t >= q.t) ?? rec.frames[rec.frames.length - 1]; return { t: q.t, x: f.x, y: f.y }; });
+  const stepAt = (t: number) => rec.steps.find((s) => t >= s.start - 1e-6 && t <= s.end + 1e-6)?.index ?? rec.steps.at(-1)?.index ?? 0;
+  for (const e of rec.events) {
+    if (e.type !== "hit") continue;
+    const later = rec.events.filter((q) => q.t >= e.t - 0.05 && q.t <= e.t + 1.5);
+    if (e.id !== undefined && later.some((q) => q.type === "pickup" && q.id === e.id)) continue;
+    if (e.id === undefined && later.some((q) => q.type === "place" && q.goal === e.text)) continue;
+    if (later.some((q) => q.type === "toggle") && /toggle/i.test(e.text ?? "")) continue;
+    // brushing the neighbours of a piece while going in to pick it up is part of picking it up
+    if (e.id !== undefined && pickups.some((p) => Math.abs(p.t - e.t) < 2.5 && Math.hypot((e.x ?? 0) - p.x, (e.y ?? 0) - p.y) < 14)) continue;
+    out.push({ step: stepAt(e.t), t: e.t, label: e.text ?? "something", id: e.id, x: e.x ?? 0, y: e.y ?? 0 });
+  }
+  return out;
+}
+
+export interface SimRepair { routine: Routine; iterations: number; remaining: RouteHit[]; changed: number }
+
+/**
+ * Fix by simulating: run the route, see what it actually hit, keep those things out of the affected steps, and repeat until it runs clean
+ * (or nothing more can be moved). Targets of a step are never moved, so a hit right at a target is reported, not "fixed".
+ */
+export async function repairBySim(
+  r: Routine, cfg: RobotConfig, s: AvoidSettings, fieldSize: number,
+  sim: (r: Routine) => import("./runtime").Recording, baseObstacles: Obstacle[], pieces: PieceLike[], onProgress?: (i: number) => void, maxIter = 6,
+): Promise<SimRepair> {
+  let cur = r;
+  let changed = 0;
+  let hits: RouteHit[] = [];
+  const extra: Obstacle[] = [];
+  const radius = robotRadius(cfg);
+  for (let it = 0; it < maxIter; it++) {
+    const rec = sim(cur);
+    hits = routeHits(rec);
+    onProgress?.(it + 1);
+    if (!hits.length) return { routine: cur, iterations: it, remaining: [], changed };
+    for (const h of hits) {
+      const ob = baseObstacles.find((o) => o.label === h.label);
+      if (ob) { if (!extra.includes(ob)) extra.push({ ...ob, keepOut: radius + s.margin + 1 }); }
+      else if (h.id !== undefined) { const p = pieces.find((q) => (q as PieceLike & { id?: number }).id === h.id); if (p && !extra.some((e) => e.label === `piece${h.id}`)) { const hh = p.r + (p.lying ? p.half ?? 0 : 0); extra.push({ x: p.x, y: p.y, w: 2 * hh, h: 2 * hh, label: `piece${h.id}`, tag: "piece", keepOut: radius * 0.9 + s.margin }); } }
+    }
+    const list = [...avoidList(baseObstacles, pieces, s, cur, cfg), ...extra];
+    let any = false;
+    for (const step of new Set(hits.map((h) => h.step))) {
+      const id = cur.steps[step]?.id;
+      if (!id) continue;
+      const res = repairRoutine(cur, cfg, list, s, fieldSize, id);
+      if (res.changed) { cur = res.routine; changed += res.changed; any = true; }
+    }
+    await new Promise((res) => setTimeout(res, 0));
+    if (!any) break;
+  }
+  return { routine: cur, iterations: maxIter, remaining: hits, changed };
+}

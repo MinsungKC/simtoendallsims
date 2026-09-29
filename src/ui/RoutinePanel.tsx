@@ -34,6 +34,7 @@ export function RoutinePanel() {
   const game = st.game();
   const planned = planPoses(routine, robot);
   const [fixMsg, setFixMsg] = useState<string | null>(null);
+  const [fixing, setFixing] = useState(false);
   const step = routine.steps.find((s) => s.id === selected) ?? null;
   const idx = step ? routine.steps.indexOf(step) : -1;
 
@@ -70,7 +71,7 @@ export function RoutinePanel() {
         <Check label="Game pieces (except ones you pick up)" value={st.avoid.pieces} onChange={(pieces) => st.setAvoid({ pieces })} />
         <Num label="Extra margin" value={st.avoid.margin} onChange={(margin) => st.setAvoid({ margin })} unit="in" min={0} step={0.5} hint="Clearance beyond the robot's half-width" />
         <div className="btns">
-          <button className="primary" onClick={() => setFixMsg(st.fixPath())}>Fix whole route</button>
+          <button className="primary" disabled={fixing} onClick={() => { setFixing(true); setFixMsg("Simulating and re-routing…"); void st.fixBySim().then((m) => { setFixMsg(m); setFixing(false); }); }}>{fixing ? "Fixing…" : "Fix whole route (checks the sim)"}</button>
           {step && <button onClick={() => setFixMsg(st.fixPath(step.id))}>Fix selected step</button>}
         </div>
         {fixMsg && <p className="note">{fixMsg}</p>}

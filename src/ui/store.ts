@@ -8,7 +8,7 @@ import { worldInit, type CustomField, type GameModule } from "../games/types";
 import { defaultPorts, type Ports, type TargetId } from "../codegen";
 import type { CodeFrame } from "../core/frame";
 import { optimizeTimeouts as optimizeTimeoutsCore } from "../core/tune";
-import { DEFAULT_AVOID, avoidList, repairRoutine, type AvoidSettings } from "../core/repair";
+import { DEFAULT_AVOID, avoidList, repairBySim, repairRoutine, routeHits, type AvoidSettings } from "../core/repair";
 import { toStraightLines } from "../core/simple";
 import { planRoutes, prepareTasks, type PlanCandidate, type PlanTask } from "../core/planner";
 
@@ -94,6 +94,7 @@ interface Store {
   avoid: AvoidSettings;
   setAvoid: (patch: Partial<AvoidSettings>) => void;
   fixPath: (only?: string) => string;
+  fixBySim: () => Promise<string>;
   overlays: Overlays;
   setOverlay: (k: keyof Overlays, v: boolean) => void;
   optimizeTimeouts: () => void;
@@ -367,6 +368,17 @@ export const useStore = create<Store>((set, get) => {
     },
     avoid: DEFAULT_AVOID,
     setAvoid: (patch) => set((s) => ({ avoid: { ...s.avoid, ...patch } })),
+    fixBySim: async () => {
+      const s = get();
+      const g = s.game();
+      const init = worldInit(g, s.routine.alliance);
+      const world = s.customField ? { ...init, objects: [...s.customField.objects, ...init.objects.filter((o) => o.held)], obstacles: s.customField.obstacles } : init;
+      const res = await repairBySim(s.routine, s.robot, s.avoid, init.fieldSize, (r) => simulate(r, s.robot, world, { seed: s.simOpts.seed }), world.obstacles, world.objects as never);
+      if (res.changed) { pushHistory(); set({ routine: s.simple ? toStraightLines(res.routine, s.robot) : res.routine }); changed(); }
+      if (!res.remaining.length) return res.changed ? `Re-routed ${res.changed} step${res.changed === 1 ? "" : "s"}; the route now runs without hitting anything (checked in the simulation).` : "The simulation shows nothing being hit, so nothing to fix.";
+      const names = [...new Set(res.remaining.map((h) => `${h.label} (step ${h.step + 1})`))].slice(0, 4).join(", ");
+      return `${res.changed ? `Re-routed ${res.changed} step${res.changed === 1 ? "" : "s"}, but ` : ""}it still hits: ${names}. That is usually a target placed right against it - move the target or approach from another side.`;
+    },
     fixPath: (only) => {
       const s = get();
       const g = s.game();
@@ -509,6 +521,7 @@ export const useStore = create<Store>((set, get) => {
       const world = s.customField ? { ...init, objects: [...s.customField.objects, ...init.objects.filter((o) => o.held)], obstacles: s.customField.obstacles } : init;
       const t0 = performance.now();
       const recording = simulate(s.routine, s.robot, world, { seed: s.simOpts.seed, placementError: s.simOpts.placementError });
+      for (const h of routeHits(recording)) recording.warnings.push({ t: h.t, step: h.step, text: `The robot runs into ${h.label} at ${h.t.toFixed(1)} s. Use “Avoid & fix path”.`, level: "warn" });
       if (g.check) {
         for (const f of g.check({ routine: s.routine, cfg: s.robot, recording, world: recording.world })) recording.warnings.push({ t: 0, step: f.step ?? -1, text: f.text, level: f.level });
       }

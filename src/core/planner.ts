@@ -8,6 +8,7 @@ import { optimizeTimeouts } from "./tune";
 import type { Obstacle, WorldInit } from "./world";
 import type { GameModule } from "../games/types";
 import { normalize } from "./common-plan";
+import { DEFAULT_AVOID, repairBySim, routeHits } from "./repair";
 import { createWorld, maxHold, type GameObject } from "./world";
 
 export type TaskAction = "pickup" | "place" | "toggle" | "none";
@@ -250,31 +251,43 @@ export async function planRoutes(a: PlanArgs): Promise<PlanCandidate[]> {
   for (const sideRank of twoSides ? [0, 1] : [0])
     for (const offset of autoApproach ? [0, 35, -35] : [0])
       for (const speed of [127, 90])
-        for (const style of (a.simple ? ["point"] : ["pose", "point", "curve"]) as ("pose" | "point" | "curve")[]) variants.push({ style, speed, offset, sideRank });
+        for (const style of (a.simple ? ["point"] : ["pose", "point", "curve"]) as ("pose" | "point" | "curve")[]) if (speed === 127 || style === "point") variants.push({ style, speed, offset, sideRank });
   const out: PlanCandidate[] = [];
   const limit = a.game.autonSeconds.value;
   const need = { pickup: tasks.filter((t) => t.action === "pickup").length, place: tasks.filter((t) => t.action === "place").length, toggle: tasks.filter((t) => t.action === "toggle").length };
+  const evaluate = (r: Routine, style: string): PlanCandidate => {
+    let rec = simulate(r, cfg, a.world, { seed: a.seed });
+    let routine = r;
+    if (rec.duration <= limit + 5) { routine = optimizeTimeouts(r, rec.steps); rec = simulate(routine, cfg, a.world, { seed: a.seed }); }
+    const problems: string[] = [];
+    for (const s of rec.steps) if (s.timedOut) problems.push(`step ${s.index + 1} timed out`);
+    const ev = (t: string) => rec.events.filter((e) => e.type === t).length;
+    if (ev("pickup") < need.pickup) problems.push("did not pick everything up");
+    if (ev("place") < need.place) problems.push("could not place");
+    if (ev("toggle") < need.toggle) problems.push("could not reach the toggle");
+    for (const w of rec.warnings) if (/failed|hit its/i.test(w.text) && !problems.some((p) => p.includes(w.text.slice(0, 12)))) problems.push(w.text);
+    for (const e of rec.events) if (e.type === "reject" && !problems.includes(e.text ?? "")) problems.push(`could not ${e.text}`);
+    for (const f of a.game.check?.({ routine, cfg, recording: rec, world: rec.world }) ?? []) if (f.level === "error") problems.push(f.text);
+    for (const h of routeHits(rec)) if (h.label !== "toggle") problems.push(`hits ${h.label} in step ${h.step + 1}`);
+    if (rec.duration > limit + 0.05) problems.push(`takes ${rec.duration.toFixed(1)} s (limit ${limit} s)`);
+    return { routine, recording: rec, duration: rec.duration, style, ok: problems.length === 0, problems };
+  };
   for (let i = 0; i < variants.length; i++) {
     if (a.shouldStop?.()) break;
     const v = variants[i];
     const r = buildRoutine(a.routine, tasks, cfg, a.obstacles, a.game.fieldSize.value, v);
-    if (r) {
-      let rec = simulate(r, cfg, a.world, { seed: a.seed });
-      let routine = r;
-      if (rec.duration <= limit + 5) { routine = optimizeTimeouts(r, rec.steps); rec = simulate(routine, cfg, a.world, { seed: a.seed }); }
-      const problems: string[] = [];
-      for (const s of rec.steps) if (s.timedOut) problems.push(`step ${s.index + 1} timed out`);
-      const ev = (t: string) => rec.events.filter((e) => e.type === t).length;
-      if (ev("pickup") < need.pickup) problems.push("did not pick everything up");
-      if (ev("place") < need.place) problems.push("could not place");
-      if (ev("toggle") < need.toggle) problems.push("could not reach the toggle");
-      for (const w of rec.warnings) if (/failed|hit its/i.test(w.text) && !problems.some((p) => p.includes(w.text.slice(0, 12)))) problems.push(w.text);
-      for (const f of a.game.check?.({ routine, cfg, recording: rec, world: rec.world }) ?? []) if (f.level === "error") problems.push(f.text);
-      if (rec.duration > limit + 0.05) problems.push(`takes ${rec.duration.toFixed(1)} s (limit ${limit} s)`);
-      out.push({ routine, recording: rec, duration: rec.duration, style: `${v.style === "pose" ? "boomerang" : v.style === "point" ? "point + turn" : "curve"}, speed ${v.speed}${v.offset ? `, approach ${v.offset > 0 ? "+" : ""}${v.offset}°` : ""}`, ok: problems.length === 0, problems });
-    }
-    a.onProgress?.((i + 1) / variants.length);
+    if (r) out.push(evaluate(r, `${v.style === "pose" ? "boomerang" : v.style === "point" ? "point + turn" : "curve"}, speed ${v.speed}${v.offset ? `, approach ${v.offset > 0 ? "+" : ""}${v.offset}°` : ""}`));
+    a.onProgress?.((i + 1) / (variants.length + 3));
     await new Promise((res) => setTimeout(res, 0));
+  }
+  // second pass: the fastest candidates whose only problem is running into things get repaired by simulation
+  const onlyHits = out.filter((c) => !c.ok && c.problems.every((p) => p.startsWith("hits "))).sort((x, y) => x.duration - y.duration).slice(0, 3);
+  for (let k = 0; k < onlyHits.length; k++) {
+    if (a.shouldStop?.()) break;
+    const c = onlyHits[k];
+    const rep = await repairBySim(c.routine, cfg, DEFAULT_AVOID, a.game.fieldSize.value, (r) => simulate(r, cfg, a.world, { seed: a.seed }), a.world.obstacles, a.world.objects as never, undefined, 3);
+    if (rep.changed) out.push(evaluate(rep.routine, `${c.style}, re-routed around obstacles`));
+    a.onProgress?.((variants.length + k + 1) / (variants.length + 3));
   }
   return out.sort((x, y) => Number(y.ok) - Number(x.ok) || x.duration - y.duration);
 }
