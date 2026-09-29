@@ -10,6 +10,7 @@ Browser-based, physics-driven VEX V5RC auton simulator and code generator. Pure-
 - [x] **Routine model + runtime**: steps, triggers (start/distance/delay/end), warnings, placement-error option, mirroring
 - [x] **Auto-tune** (Web Worker) from the physics model
 - [x] **Editor UI**: field canvas with draggable handles, add-step tools, undo/redo, timeline + charts, robot/routine/code/field panels
+- [x] **Project features**: multiple routines per project (+ zip export of all), preflight checks (legality, start pose, off-field targets), autosave, save/open project files, CI
 - [x] **Games**: Override (approx.), Push Back (approx.), High Stakes (approx.), Over Under/Spin Up/Tipping Point stubs, blank
 - [x] **Code generators**: LemLib, EZ-Template, JAR-Template, generic PROS - compile/type/behavior checked (see ADDING_A_TEMPLATE.md)
 
