@@ -18,7 +18,7 @@ describe("route planner", () => {
     expect(res.length).toBeGreaterThan(5);
     const top = topThree(res);
     expect(top.length).toBeGreaterThan(0);
-    for (let i = 1; i < top.length; i++) expect(top[i].duration).toBeGreaterThanOrEqual(top[i - 1].duration);
+    for (let i = 1; i < top.length; i++) expect(top[i].duration + 0.5 * top[i].pushes).toBeGreaterThanOrEqual(top[i - 1].duration + 0.5 * top[i - 1].pushes - 1e-9);
     for (const t of top) { expect(t.problems).toEqual([]); expect(t.recording.events.some((e) => e.type === "place")).toBe(true); }
   }, 60000);
 });

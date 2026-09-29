@@ -1,8 +1,7 @@
-import { avoidObstacles, simplifyPolyline } from "./autoroute";
+import { firstBlocked, findPath } from "./nav";
 import { planPoses } from "./common-plan";
-import { fitStroke } from "./fit";
 import { samplePath } from "./path";
-import type { RobotConfig } from "./robot";
+import { zoneTakes, type RobotConfig } from "./robot";
 import { defaultMotion, uid, type Routine, type Step } from "./routine";
 import type { Obstacle } from "./world";
 
@@ -26,58 +25,96 @@ export function avoidList(obstacles: Obstacle[], pieces: PieceLike[], s: AvoidSe
       if (p.stackedIn || p.nestedIn !== undefined) continue;
       if (wanted.some((w) => dist(w, p) < 12)) continue;
       const h = p.r + (p.lying ? p.half ?? 0 : 0);
-      out.push({ x: p.x, y: p.y, w: 2 * h, h: 2 * h, label: "piece", tag: "piece", keepOut: Math.max(3, cfg.width / 2 - 1) });
+      out.push({ x: p.x, y: p.y, w: 2 * h, h: 2 * h, label: "piece", tag: "piece", soft: true, keepOut: Math.max(3, cfg.width / 2 - 1) });
     }
   }
   return out;
 }
 
+export interface RepairTune {
+  /** grow the turning-radius keep-out (1 = the robot's half-diagonal) */
+  scale: number;
+  /** 0: keep motion types; 1: replace boomerang poses by drive + turn; 2: also slow down */
+  level: number;
+}
+
 /**
- * Re-route steps so the robot's path stays clear of `obstacles`: straight legs get bends inserted, curves are pushed away and refit.
- * Targets themselves are never moved. Returns how many steps changed.
+ * Re-route steps so the robot's path stays clear of `obstacles`, using grid path planning (never a corner-cutting nudge). Straight and
+ * boomerang legs get stop-and-go detour legs; a curve that crosses something becomes straight legs. Detours made earlier are replaced,
+ * not stacked. Targets themselves are never moved. Returns how many steps changed.
  */
-export function repairRoutine(r: Routine, cfg: RobotConfig, obstacles: Obstacle[], s: AvoidSettings, fieldSize: number, only?: string): { routine: Routine; changed: number } {
-  const poses = planPoses(r, cfg);
-  const clearance = robotRadius(cfg) + s.margin;
-  const o = { obstacles, fieldSize: s.walls ? fieldSize : 100000, clearance };
+export function repairRoutine(r: Routine, cfg: RobotConfig, obstacles: Obstacle[], s: AvoidSettings, fieldSize: number, only?: string, tune: RepairTune = { scale: 1, level: 0 }, perStep?: Map<string, RepairTune>): { routine: Routine; changed: number } {
+  // detours made for a step earlier are replaced when that step is re-planned (never stacked); other steps keep theirs
+  const redo = new Set<string>(perStep ? [...perStep.keys()] : only ? [only] : r.steps.map((st) => st.id));
+  const base: Routine = { ...r, steps: r.steps.filter((st) => !(st.label?.startsWith("detour:") && redo.has(st.label.slice(7)))) };
+  const poses = planPoses(base, cfg);
+  const wall = cfg.width / 2;
+  const navFor = (t: RepairTune) => ({ obstacles, fieldSize: s.walls ? fieldSize : 100000, radius: robotRadius(cfg) * t.scale + s.margin, wall });
   const steps: Step[] = [];
   let changed = 0;
-  r.steps.forEach((st, i) => {
+  const detour = (from: { x: number; y: number }, p: { x: number; y: number }, forwards: boolean, speed: number, forStep: string): Step => {
+    const mv = defaultMotion("moveToPoint", { x: Math.round(p.x * 4) / 4, y: Math.round(p.y * 4) / 4, heading: 0 });
+    if (mv.type === "moveToPoint") { mv.forwards = forwards; mv.maxSpeed = speed; mv.minSpeed = 0; mv.timeout = Math.max(1500, Math.ceil(((dist(from, p) / 12) * 1000 + 1500) / 100) * 100); }
+    return { id: uid(), motion: mv, actions: [], label: `detour:${forStep}` };
+  };
+  // moveToPoint turns WHILE it drives, so a robot facing the wrong way swings a wide arc into whatever is beside it: face the leg first
+  const turnFirst = (from: { x: number; y: number }, to: { x: number; y: number }, heading: number, forwards: boolean, forStep: string): Step | null => {
+    const want = (Math.atan2(to.x - from.x, to.y - from.y) * 180) / Math.PI + (forwards ? 0 : 180);
+    let d = (want - heading) % 360; if (d > 180) d -= 360; if (d < -180) d += 360;
+    if (Math.abs(d) < 25 || dist(from, to) < 3) return null;
+    const mv = defaultMotion("turnToPoint", { x: to.x, y: to.y, heading: 0 });
+    if (mv.type !== "turnToPoint") return null;
+    mv.forwards = forwards; mv.timeout = 2500;
+    return { id: uid(), motion: mv, actions: [], label: `detour:${forStep}` };
+  };
+  const turnNeeded = (from: { x: number; y: number; heading: number }, to: { x: number; y: number }, forwards: boolean) => { const want = (Math.atan2(to.x - from.x, to.y - from.y) * 180) / Math.PI + (forwards ? 0 : 180); let d = (want - from.heading) % 360; if (d > 180) d -= 360; if (d < -180) d += 360; return Math.abs(d) >= 25 && dist(from, to) >= 3; };
+  const headingTo = (from: { x: number; y: number }, to: { x: number; y: number }, forwards: boolean) => (Math.atan2(to.x - from.x, to.y - from.y) * 180) / Math.PI + (forwards ? 0 : 180);
+  base.steps.forEach((st, i) => {
+    const t = perStep?.get(st.id) ?? tune;
     const m = st.motion;
-    if ((only && st.id !== only) || (m.type !== "moveToPoint" && m.type !== "moveToPose" && m.type !== "follow")) { steps.push(st); return; }
+    if ((only && st.id !== only && !perStep?.has(st.id)) || (m.type !== "moveToPoint" && m.type !== "moveToPose" && m.type !== "follow")) { steps.push(st); return; }
     const from = poses.before[i];
+    const speed = t.level >= 2 ? 70 : 100;
+    const nav = navFor(t);
     if (m.type === "follow") {
       const pts = samplePath(m.path);
-      if (pts.length < 3) { steps.push(st); return; }
-      const safe = avoidObstacles(pts, o);
-      safe[0] = pts[0]; safe[safe.length - 1] = pts[pts.length - 1];
-      if (safe.every((p, k) => dist(p, pts[k]) < 0.4)) { steps.push(st); return; }
-      const segs = fitStroke(safe, 0.8);
-      if (!segs.length) { steps.push(st); return; }
+      if (pts.length < 3 || firstBlocked(pts, nav) < 0) { steps.push(st); return; }
+      const end = pts[pts.length - 1];
+      const path = findPath(pts[0], end, nav) ?? findPath(pts[0], end, { ...nav, radius: cfg.width / 2 + s.margin });
+      if (!path) { steps.push(st); return; }
       changed++;
-      steps.push({ ...st, motion: { ...m, path: { ...m.path, segments: segs.map((sg) => ({ p: sg.p.map((q) => ({ x: Math.round(q.x * 100) / 100, y: Math.round(q.y * 100) / 100 })) as typeof sg.p })) } } });
+      let prev: { x: number; y: number } = pts[0];
+      let hd = from.heading;
+      for (const p of [...path.slice(1, -1), end]) { const tf = turnFirst(prev, p, hd, m.forwards, st.id); if (tf) steps.push(tf); hd = headingTo(prev, p, m.forwards); if (p !== end) steps.push(detour(prev, p, m.forwards, speed, st.id)); prev = p; }
+      const last = defaultMotion("moveToPoint", { x: Math.round(end.x * 4) / 4, y: Math.round(end.y * 4) / 4, heading: 0 });
+      if (last.type === "moveToPoint") { last.forwards = m.forwards; last.maxSpeed = speed; last.minSpeed = 0; last.timeout = Math.max(m.timeout, 2000); steps.push({ ...st, motion: last }); }
       return;
     }
     const target = { x: m.x, y: m.y };
-    const n = Math.max(2, Math.ceil(dist(from, target) / 2));
-    const line = Array.from({ length: n + 1 }, (_, k) => ({ x: from.x + ((target.x - from.x) * k) / n, y: from.y + ((target.y - from.y) * k) / n }));
-    const safe = avoidObstacles(line, o);
-    safe[0] = line[0]; safe[n] = target;
-    if (safe.every((p, k) => dist(p, line[k]) < 0.4)) { steps.push(st); return; }
-    const idx = simplifyPolyline(safe, 1.6);
-    let prev: { x: number; y: number } = from;
-    for (const k of idx.slice(1, -1)) {
-      const p = safe[k];
-      if (dist(prev, p) < 4) continue;
-      const mv = defaultMotion("moveToPoint", { x: Math.round(p.x * 4) / 4, y: Math.round(p.y * 4) / 4, heading: 0 });
-      if (mv.type !== "moveToPoint") continue;
-      mv.forwards = m.forwards; mv.maxSpeed = m.maxSpeed; mv.minSpeed = 45; mv.earlyExit = 6;
-      mv.timeout = Math.max(1500, Math.ceil(((dist(prev, p) / 15) * 1000 + 1500) / 100) * 100);
-      steps.push({ id: uid(), motion: mv, actions: [] });
-      prev = p;
+    const path = findPath(from, target, nav) ?? findPath(from, target, { ...nav, radius: cfg.width / 2 + s.margin });
+    const straight = !path || path.length <= 2;
+    const convert = m.type === "moveToPose" && t.level >= 1;
+    if (straight && !convert && m.type !== "moveToPoint") { steps.push(st); return; }
+    if (straight && !convert && !turnNeeded(from, target, m.forwards)) { steps.push(st); return; }
+    if (!straight || m.type === "moveToPoint") {
+      let prev: { x: number; y: number } = from;
+      let hd = from.heading;
+      const legs = straight ? [target] : [...path!.slice(1, -1), target];
+      for (const p of legs) {
+        const tf = turnFirst(prev, p, hd, m.forwards, st.id);
+        if (tf) steps.push(tf);
+        hd = headingTo(prev, p, m.forwards);
+        if (p !== target) steps.push(detour(prev, p, m.forwards, speed, st.id));
+        prev = p;
+      }
     }
     changed++;
-    steps.push(st);
+    if (convert) {
+      const mv = defaultMotion("moveToPoint", { x: m.x, y: m.y, heading: 0 });
+      if (mv.type === "moveToPoint") { mv.forwards = m.forwards; mv.maxSpeed = Math.min(m.maxSpeed, speed); mv.minSpeed = 0; mv.timeout = m.timeout; }
+      steps.push({ ...st, motion: mv, actions: st.actions.filter((a) => a.when.kind !== "end") });
+      steps.push({ id: uid(), motion: { ...defaultMotion("turnToHeading", { x: m.x, y: m.y, heading: m.heading }), timeout: 2000 } as never, actions: st.actions.filter((a) => a.when.kind === "end") });
+    } else steps.push(t.level >= 2 && "maxSpeed" in m ? { ...st, motion: { ...m, maxSpeed: Math.min(m.maxSpeed, speed) } } : st);
   });
   return { routine: { ...r, steps }, changed };
 }
@@ -102,41 +139,81 @@ export function routeHits(rec: import("./runtime").Recording): RouteHit[] {
   return out;
 }
 
-export interface SimRepair { routine: Routine; iterations: number; remaining: RouteHit[]; changed: number }
+export interface SimRepair { routine: Routine; iterations: number; remaining: RouteHit[]; changed: number; notes: string[]; timedOut: number[]; endError: number }
 
 /**
- * Fix by simulating: run the route, see what it actually hit, keep those things out of the affected steps, and repeat until it runs clean
- * (or nothing more can be moved). Targets of a step are never moved, so a hit right at a target is reported, not "fixed".
+ * Fix by simulating, and get smarter each round. For every step that still hits something the planner tries, in order:
+ *  - drive into a piece near the step's end with no intake running -> turn the right intake on for that step (a hit becomes a pickup);
+ *  - reach a Goal while holding something with no Place -> add the Place;
+ *  - otherwise re-plan the step's path around what was hit, then with a bigger safety radius and drive+turn instead of a boomerang,
+ *    then slower.
+ * Steps are stop-and-go so the robot really ends where each leg says. Targets are never moved.
  */
 export async function repairBySim(
   r: Routine, cfg: RobotConfig, s: AvoidSettings, fieldSize: number,
-  sim: (r: Routine) => import("./runtime").Recording, baseObstacles: Obstacle[], pieces: PieceLike[], onProgress?: (i: number) => void, maxIter = 6,
+  sim: (r: Routine) => import("./runtime").Recording, baseObstacles: Obstacle[], pieces: (PieceLike & { id?: number })[], onProgress?: (i: number) => void, maxIter = 8,
 ): Promise<SimRepair> {
   let cur = r;
   let changed = 0;
   let hits: RouteHit[] = [];
+  const notes: string[] = [];
   const extra: Obstacle[] = [];
+  const attempts = new Map<string, number>();
   const radius = robotRadius(cfg);
+  let rec = sim(cur);
   for (let it = 0; it < maxIter; it++) {
-    const rec = sim(cur);
     hits = routeHits(rec);
     onProgress?.(it + 1);
-    if (!hits.length) return { routine: cur, iterations: it, remaining: [], changed };
-    for (const h of hits) {
-      const ob = baseObstacles.find((o) => o.label === h.label);
-      if (ob) { if (!extra.includes(ob)) extra.push({ ...ob, keepOut: radius + s.margin + 1 }); }
-      else if (h.id !== undefined) { const p = pieces.find((q) => (q as PieceLike & { id?: number }).id === h.id); if (p && !extra.some((e) => e.label === `piece${h.id}`)) { const hh = p.r + (p.lying ? p.half ?? 0 : 0); extra.push({ x: p.x, y: p.y, w: 2 * hh, h: 2 * hh, label: `piece${h.id}`, tag: "piece", keepOut: radius * 0.9 + s.margin }); } }
+    const jammed = rec.steps.filter((x) => x.timedOut).map((x) => x.index);
+    if (!hits.length && !jammed.length) break;
+    const poses = planPoses(cur, cfg);
+    const perStep = new Map<string, RepairTune>();
+    let didSomething = false;
+    const troubled = new Set<number>([...hits.map((h) => h.step), ...jammed]);
+    for (const si of troubled) {
+      const step = cur.steps[si];
+      if (!step) continue;
+      const stepHits = hits.filter((h) => h.step === si);
+      const end = poses.after[si];
+      // smarter than avoiding: is the robot brushing something it should be taking / scoring in?
+      let handled = false;
+      const m = step.motion;
+      for (const h of stepHits) {
+        if (h.id !== undefined && !step.actions.some((a) => a.type === "intakeIn" || a.type === "rearIntakeIn") && Math.hypot(h.x - end.x, h.y - end.y) < 7) {
+          const p = pieces.find((q) => q.id === h.id);
+          const back = "forwards" in m && !m.forwards;
+          const zone = back ? cfg.rearIntake : cfg.intake;
+          if (p && zone && zoneTakes(zone, !!p.lying)) {
+            step.actions.push({ id: uid("a"), type: back ? "rearIntakeIn" : "intakeIn", when: { kind: "start" } }, { id: uid("a"), type: back ? "rearIntakeStop" : "intakeStop", when: { kind: "end" } });
+            notes.push(`Step ${si + 1} runs into a ${h.label}: added the ${back ? "back" : "front"} intake there so it picks it up.`);
+            handled = true; didSomething = true; changed++;
+          }
+        } else if (h.id === undefined && baseObstacles.some((o) => o.label === h.label && o.tag?.startsWith("goal:")) && Math.hypot(h.x - end.x, h.y - end.y) < 9 && !step.actions.some((a) => a.type === "place")) {
+          const f = rec.frames.find((x) => x.t >= h.t) ?? rec.frames[rec.frames.length - 1];
+          if (f.held > 0) { step.actions.push({ id: uid("a"), type: "place", when: { kind: "end" } }); notes.push(`Step ${si + 1} reaches ${h.label} while holding something: added Place.`); handled = true; didSomething = true; changed++; }
+        }
+      }
+      if (handled && !jammed.includes(si)) continue;
+      const n = (attempts.get(step.id) ?? 0) + 1;
+      attempts.set(step.id, n);
+      perStep.set(step.id, { scale: 1 + 0.15 * (n - 1), level: Math.min(2, n - 1) });
+      for (const h of stepHits) {
+        const ob = baseObstacles.find((o) => o.label === h.label);
+        if (ob && !extra.some((e) => e.label === ob.label)) extra.push({ ...ob, keepOut: radius + s.margin + 1 });
+        else if (h.id !== undefined) { const p = pieces.find((q) => q.id === h.id); if (p && !extra.some((e) => e.label === `piece${h.id}`)) { const hh = p.r + (p.lying ? p.half ?? 0 : 0); extra.push({ x: p.x, y: p.y, w: 2 * hh, h: 2 * hh, label: `piece${h.id}`, tag: "piece", soft: true, keepOut: radius * 0.9 + s.margin }); } }
+      }
     }
-    const list = [...avoidList(baseObstacles, pieces, s, cur, cfg), ...extra];
-    let any = false;
-    for (const step of new Set(hits.map((h) => h.step))) {
-      const id = cur.steps[step]?.id;
-      if (!id) continue;
-      const res = repairRoutine(cur, cfg, list, s, fieldSize, id);
-      if (res.changed) { cur = res.routine; changed += res.changed; any = true; }
+    if (perStep.size) {
+      const list = [...avoidList(baseObstacles, pieces, s, cur, cfg), ...extra];
+      const res = repairRoutine(cur, cfg, list, s, fieldSize, undefined, { scale: 1, level: 0 }, perStep);
+      if (res.changed) { cur = res.routine; changed += res.changed; didSomething = true; }
     }
     await new Promise((res) => setTimeout(res, 0));
-    if (!any) break;
+    if (!didSomething) break;
+    rec = sim(cur);
   }
-  return { routine: cur, iterations: maxIter, remaining: hits, changed };
+  hits = routeHits(rec);
+  const last = cur.steps.length ? planPoses(cur, cfg).after.at(-1)! : cur.start;
+  const f = rec.frames[rec.frames.length - 1];
+  return { routine: cur, iterations: maxIter, remaining: hits, changed, notes, timedOut: rec.steps.filter((x) => x.timedOut).map((x) => x.index), endError: Math.hypot(f.x - last.x, f.y - last.y) };
 }

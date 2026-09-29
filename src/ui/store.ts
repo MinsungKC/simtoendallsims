@@ -374,10 +374,22 @@ export const useStore = create<Store>((set, get) => {
       const init = worldInit(g, s.routine.alliance);
       const world = s.customField ? { ...init, objects: [...s.customField.objects, ...init.objects.filter((o) => o.held)], obstacles: s.customField.obstacles } : init;
       const res = await repairBySim(s.routine, s.robot, s.avoid, init.fieldSize, (r) => simulate(r, s.robot, world, { seed: s.simOpts.seed }), world.obstacles, world.objects as never);
-      if (res.changed) { pushHistory(); set({ routine: s.simple ? toStraightLines(res.routine, s.robot) : res.routine }); changed(); }
-      if (!res.remaining.length) return res.changed ? `Re-routed ${res.changed} step${res.changed === 1 ? "" : "s"}; the route now runs without hitting anything (checked in the simulation).` : "The simulation shows nothing being hit, so nothing to fix.";
-      const names = [...new Set(res.remaining.map((h) => `${h.label} (step ${h.step + 1})`))].slice(0, 4).join(", ");
-      return `${res.changed ? `Re-routed ${res.changed} step${res.changed === 1 ? "" : "s"}, but ` : ""}it still hits: ${names}. That is usually a target placed right against it - move the target or approach from another side.`;
+      let routine = res.routine;
+      if (res.changed) {
+        const rec = simulate(routine, s.robot, world, { seed: s.simOpts.seed });
+        routine = optimizeTimeoutsCore(routine, rec.steps); // sized from the repaired run
+        pushHistory();
+        set({ routine: s.simple ? toStraightLines(routine, s.robot) : routine });
+        changed();
+      }
+      const bits: string[] = [...res.notes];
+      if (res.changed) bits.push(`Re-planned ${res.changed} step${res.changed === 1 ? "" : "s"}.`);
+      if (res.timedOut.length) bits.push(`Steps ${res.timedOut.map((i) => i + 1).join(", ")} still get stuck (the robot can't reach that point - it is boxed in or the target is against something).`);
+      if (res.remaining.length) bits.push(`Still hits: ${[...new Set(res.remaining.map((h) => `${h.label} (step ${h.step + 1})`))].slice(0, 4).join(", ")}. That is usually a target placed against it - move the target or approach from another side.`);
+      if (res.endError > 3) bits.push(`Ends ${res.endError.toFixed(1)} in from the last target.`);
+      if (!bits.length) return "The simulation shows nothing being hit, so nothing to fix.";
+      if (!res.remaining.length && !res.timedOut.length) bits.push("The route now runs without hitting anything (checked in the simulation).");
+      return bits.join(" ");
     },
     fixPath: (only) => {
       const s = get();

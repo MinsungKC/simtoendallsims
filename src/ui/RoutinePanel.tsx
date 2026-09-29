@@ -64,7 +64,7 @@ export function RoutinePanel() {
       <PlanPanel />
 
       <Section title="Avoid & fix path">
-        <p className="note">Tick what the robot must not hit, then fix the route. Curves are pushed away and refit; straight legs get bends added. Targets you drive to are never moved.</p>
+        <p className="note">Tick what the robot must not hit, then fix the route. Legs are re-planned on a grid around what you ticked (the robot turns to face each leg first), then the simulation is run to catch anything left. Loose pieces are avoided when possible but may be nudged. Targets are never moved.</p>
         <Check label="Goals" value={st.avoid.goals} onChange={(goals) => st.setAvoid({ goals })} />
         <Check label="Loaders" value={st.avoid.loaders} onChange={(loaders) => st.setAvoid({ loaders })} />
         <Check label="Walls" value={st.avoid.walls} onChange={(walls) => st.setAvoid({ walls })} />

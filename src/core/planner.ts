@@ -1,4 +1,4 @@
-import { avoidObstacles } from "./autoroute";
+import { findPath } from "./nav";
 import { fitStroke } from "./fit";
 import { pathLength } from "./path";
 import { scoreSpecOf, zoneTakes, type RobotConfig } from "./robot";
@@ -8,7 +8,7 @@ import { optimizeTimeouts } from "./tune";
 import type { Obstacle, WorldInit } from "./world";
 import type { GameModule } from "../games/types";
 import { normalize } from "./common-plan";
-import { DEFAULT_AVOID, repairBySim, routeHits } from "./repair";
+import { DEFAULT_AVOID, avoidList, repairBySim, routeHits } from "./repair";
 import { createWorld, maxHold, type GameObject } from "./world";
 
 export type TaskAction = "pickup" | "place" | "toggle" | "none";
@@ -46,6 +46,8 @@ export interface PlanCandidate {
   style: string;
   ok: boolean;
   problems: string[];
+  /** loose pieces the robot bumped on the way (allowed, but ranked lower) */
+  pushes: number;
 }
 
 const bearing = (a: { x: number; y: number }, b: { x: number; y: number }) => (Math.atan2(b.x - a.x, b.y - a.y) * 180) / Math.PI;
@@ -94,8 +96,13 @@ function buildRoutine(base: Routine, tasks: PlanTask[], cfg: RobotConfig, obstac
     // route around solid elements, keeping only the bends
     const n = Math.max(2, Math.ceil(dist(cur, target) / 2));
     const line = Array.from({ length: n + 1 }, (_, i) => ({ x: cur.x + ((target.x - cur.x) * i) / n, y: cur.y + ((target.y - cur.y) * i) / n }));
-    const safe = avoidObstacles(line, { obstacles, fieldSize, clearance: task.action === "toggle" ? 0.5 : clearance });
-    safe[safe.length - 1] = target;
+    const nav = { obstacles, fieldSize, radius: clearance, wall: cfg.width / 2 };
+    const route = findPath(cur, target, nav) ?? findPath(cur, target, { ...nav, radius: cfg.width / 2 + 1 }) ?? [cur, target];
+    // densify the corners so curve fitting and corner detection see a normal polyline
+    const safe: { x: number; y: number }[] = [];
+    for (let k = 0; k + 1 < route.length; k++) { const seg = Math.max(1, Math.ceil(dist(route[k], route[k + 1]) / 2)); for (let q = 0; q < seg; q++) safe.push({ x: route[k].x + ((route[k + 1].x - route[k].x) * q) / seg, y: route[k].y + ((route[k + 1].y - route[k].y) * q) / seg }); }
+    safe.push(target);
+    void line;
     const mk = (m: MotionSpec, actions: ActionSpec[] = []): Step => ({ id: uid(), motion: m, actions });
     const first: ActionSpec[] = [];
     const last: ActionSpec[] = [];
@@ -254,6 +261,9 @@ export async function planRoutes(a: PlanArgs): Promise<PlanCandidate[]> {
         for (const style of (a.simple ? ["point"] : ["pose", "point", "curve"]) as ("pose" | "point" | "curve")[]) if (speed === 127 || style === "point") variants.push({ style, speed, offset, sideRank });
   const out: PlanCandidate[] = [];
   const limit = a.game.autonSeconds.value;
+  // what the route must keep clear of: Goals/Loaders firmly, loose pieces softly (except the ones it is going to pick up)
+  const objects = (a.world.objects as { x: number; y: number; r: number; lying?: boolean; half?: number; stackedIn?: string; nestedIn?: number }[]).filter((o) => !tasks.some((t) => t.action === "pickup" && Math.hypot(t.x - o.x, t.y - o.y) < 9));
+  const navObstacles = avoidList(a.obstacles, objects, DEFAULT_AVOID, a.routine, cfg);
   const need = { pickup: tasks.filter((t) => t.action === "pickup").length, place: tasks.filter((t) => t.action === "place").length, toggle: tasks.filter((t) => t.action === "toggle").length };
   const evaluate = (r: Routine, style: string): PlanCandidate => {
     let rec = simulate(r, cfg, a.world, { seed: a.seed });
@@ -268,14 +278,15 @@ export async function planRoutes(a: PlanArgs): Promise<PlanCandidate[]> {
     for (const w of rec.warnings) if (/failed|hit its/i.test(w.text) && !problems.some((p) => p.includes(w.text.slice(0, 12)))) problems.push(w.text);
     for (const e of rec.events) if (e.type === "reject" && !problems.includes(e.text ?? "")) problems.push(`could not ${e.text}`);
     for (const f of a.game.check?.({ routine, cfg, recording: rec, world: rec.world }) ?? []) if (f.level === "error") problems.push(f.text);
-    for (const h of routeHits(rec)) if (h.label !== "toggle") problems.push(`hits ${h.label} in step ${h.step + 1}`);
+    let pushes = 0;
+    for (const h of routeHits(rec)) { if (h.label === "toggle") continue; if (h.id !== undefined) pushes++; else problems.push(`hits ${h.label} in step ${h.step + 1}`); }
     if (rec.duration > limit + 0.05) problems.push(`takes ${rec.duration.toFixed(1)} s (limit ${limit} s)`);
-    return { routine, recording: rec, duration: rec.duration, style, ok: problems.length === 0, problems };
+    return { routine, recording: rec, duration: rec.duration, style, ok: problems.length === 0, problems, pushes };
   };
   for (let i = 0; i < variants.length; i++) {
     if (a.shouldStop?.()) break;
     const v = variants[i];
-    const r = buildRoutine(a.routine, tasks, cfg, a.obstacles, a.game.fieldSize.value, v);
+    const r = buildRoutine(a.routine, tasks, cfg, navObstacles, a.game.fieldSize.value, v);
     if (r) out.push(evaluate(r, `${v.style === "pose" ? "boomerang" : v.style === "point" ? "point + turn" : "curve"}, speed ${v.speed}${v.offset ? `, approach ${v.offset > 0 ? "+" : ""}${v.offset}°` : ""}`));
     a.onProgress?.((i + 1) / (variants.length + 3));
     await new Promise((res) => setTimeout(res, 0));
@@ -289,7 +300,7 @@ export async function planRoutes(a: PlanArgs): Promise<PlanCandidate[]> {
     if (rep.changed) out.push(evaluate(rep.routine, `${c.style}, re-routed around obstacles`));
     a.onProgress?.((variants.length + k + 1) / (variants.length + 3));
   }
-  return out.sort((x, y) => Number(y.ok) - Number(x.ok) || x.duration - y.duration);
+  return out.sort((x, y) => Number(y.ok) - Number(x.ok) || x.duration + 0.5 * x.pushes - (y.duration + 0.5 * y.pushes));
 }
 
 /** Best three that work, without near-duplicates (same shape within 0.05 s). */

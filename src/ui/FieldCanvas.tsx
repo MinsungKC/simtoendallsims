@@ -431,9 +431,10 @@ export function FieldCanvas() {
     const obstacles = avoidList(st.customField ? st.customField.obstacles : g.obstacles, st.customField ? st.customField.objects : g.objects, st.avoid, st.routine, st.robot);
     if (st.simple) {
       // simple mode: straight legs only
-      const legs = polylineFromStroke(ink, { obstacles, fieldSize, clearance: robotRadius(st.robot) + st.avoid.margin, from: { x: last.x, y: last.y } }, 4, 10);
+      const legs = polylineFromStroke(ink, { obstacles: [], fieldSize, clearance: 0, from: { x: last.x, y: last.y } }, 5, 10);
       let prev = { x: last.x, y: last.y };
       st.addSteps(legs.map((q) => { const m = defaultMotion("moveToPoint", { x: q.x, y: q.y, heading: 0 }); if (m.type === "moveToPoint") { m.forwards = !st.drawReverse; m.timeout = Math.max(1500, Math.ceil(((Math.hypot(q.x - prev.x, q.y - prev.y) / 15) * 1000 + 1500) / 100) * 100); } prev = q; return m; }));
+      st.fixPath(); // grid-plan every leg around Goals, loaders and walls, facing each leg first
       return;
     }
     // one smooth curve (obstacle-avoided, tangent-continuous), then a turn that sets the ending face
@@ -450,6 +451,7 @@ export function FieldCanvas() {
     const face = Math.round(tangent + (st.drawReverse ? 180 : 0));
     const turn = defaultMotion("turnToHeading", { x: end[3].x, y: end[3].y, heading: ((face + 540) % 360) - 180 });
     st.addSteps([m, turn]);
+    st.fixPath();
   };
 
   return (

@@ -53,7 +53,7 @@ export function PlanPanel() {
           {(top.length ? top : failed.slice().sort((a, b) => a.problems.length - b.problems.length || a.duration - b.duration).slice(0, 3)).map((c, i) => (
             <div className="card" key={i}>
               <div className="row two"><b>#{i + 1} · {c.duration.toFixed(2)} s{c.ok ? "" : " (needs a fix)"}</b><button className={c.ok ? "primary" : ""} onClick={() => st.applyPlan(c)}>Use this</button></div>
-              <p className="note">{c.style} · {c.routine.steps.length} steps · your score {st.scoreOf(c)}</p>
+              <p className="note">{c.style} · {c.routine.steps.length} steps · your score {st.scoreOf(c)}{c.pushes ? ` · bumps ${c.pushes} loose piece${c.pushes === 1 ? "" : "s"}` : ""}</p>
               {c.problems.slice(0, 3).map((p, k) => <p key={k} className="warn">⚠ {p}</p>)}
             </div>
           ))}
