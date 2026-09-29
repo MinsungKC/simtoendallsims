@@ -89,3 +89,15 @@ The tuner scores kP/kD on how long moves really take (exit time and settle time 
 overshoot and final error, averaged over +-20% gain variations, with wide ranges (lateral kD up to 160). The old version penalised gain
 size and searched narrow ranges, which produced slow, gentle gains. "Auto timeouts" (Route tab) sets each step's timeout to
 1.6x its simulated time + 300 ms.
+
+## Route planning math (target planner)
+Stops are ordered; each stop offers many arrival poses (16 approach directions x usable robot ends). The planner minimises total time
+
+    leg time = t0 + d/v + (turn1 + turn2)/w          (one smooth boomerang move; turning overlaps driving)
+    or        tw0 + turn/w   for a pure turn
+
+with `v, t0, w, tw0` **measured** from four simulations of the actual robot and gains (`timeplan.ts: calibrate`) - t0 and tw0 are the
+controller's exit/settle overhead, which is why fewer, smoother motions win. `d` is the shortest grid route around Goals/walls (soft
+penalty through loose pieces). Dynamic programming over (stop, pose) gives the cheapest chain, and the best few distinct chains are turned into routes in
+three styles (one smooth move per stop, chained corners, stop-and-turn), simulated, repaired if they hit something, and ranked by simulated
+time. Approach speed into a standing Pin/Cup is capped below its tipping speed. The prediction matches the sim closely (5.4 s predicted, 5.6 s simulated in the test case).

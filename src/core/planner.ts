@@ -1,6 +1,5 @@
-import { findPath } from "./nav";
-import { fitStroke } from "./fit";
-import { pathLength } from "./path";
+import type { NavOptions } from "./nav";
+import { bestChains, calibrate, legPath, type Pose, type StopSpec } from "./timeplan";
 import { scoreSpecOf, zoneTakes, type RobotConfig } from "./robot";
 import { defaultMotion, uid, type ActionType, type ActionSpec, type MotionSpec, type Routine, type Step } from "./routine";
 import { simulate, type Recording } from "./runtime";
@@ -9,7 +8,7 @@ import type { Obstacle, WorldInit } from "./world";
 import type { GameModule } from "../games/types";
 import { normalize } from "./common-plan";
 import { DEFAULT_AVOID, avoidList, repairBySim, routeHits } from "./repair";
-import { createWorld, maxHold, type GameObject } from "./world";
+import { createWorld, maxHold, tipSpeed, type GameObject } from "./world";
 
 export type TaskAction = "pickup" | "place" | "toggle" | "none";
 
@@ -51,6 +50,7 @@ export interface PlanCandidate {
 }
 
 const bearing = (a: { x: number; y: number }, b: { x: number; y: number }) => (Math.atan2(b.x - a.x, b.y - a.y) * 180) / Math.PI;
+const angleDiff = (a: number, b: number) => Math.abs(normalize(a - b));
 const dist = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
 
 function sidesFor(task: PlanTask, cfg: RobotConfig): ("front" | "back")[] {
@@ -74,104 +74,87 @@ function standoff(task: PlanTask, cfg: RobotConfig, side: "front" | "back"): num
   return spec ? L - (spec.inset ?? 0) + spec.reach * 0.5 : L + 2;
 }
 
-interface Variant { style: "pose" | "point" | "curve"; speed: number; offset: number; sideRank: number }
+const ACTION_SECONDS = { pickup: 0.25, place: 0.3, toggle: 0.3, none: 0 } as const;
 
-function buildRoutine(base: Routine, tasks: PlanTask[], cfg: RobotConfig, obstacles: Obstacle[], fieldSize: number, v: Variant): Routine | null {
+/** Every arrival pose worth considering for each stop: usable ends of the robot x approach directions (16, or the one the user fixed). */
+function stopSpecs(tasks: PlanTask[], cfg: RobotConfig, fieldSize: number): StopSpec[] {
+  const lim = fieldSize / 2 - cfg.width / 2;
+  const cl = (v: number) => Math.max(-lim, Math.min(lim, v));
+  return tasks.map((t) => {
+    const poses: Pose[] = [];
+    if (t.targetKind === "point") {
+      poses.push({ x: cl(t.x), y: cl(t.y), h: t.approach === "auto" ? null : normalize(t.approach), theta: t.approach === "auto" ? 0 : t.approach, side: t.side === "back" ? "back" : "front" });
+    } else {
+      for (const side of sidesFor(t, cfg)) {
+        const thetas = t.approach === "auto" ? Array.from({ length: 16 }, (_, i) => i * 22.5) : [t.approach];
+        const d = standoff(t, cfg, side);
+        for (const theta of thetas) {
+          const r = (theta * Math.PI) / 180;
+          // the robot can't stand inside the wall: pieces hugging the perimeter are reached from beside them
+          poses.push({ x: Math.round(cl(t.x - Math.sin(r) * d) * 4) / 4, y: Math.round(cl(t.y - Math.cos(r) * d) * 4) / 4, h: Math.round(normalize(theta + (side === "back" ? 180 : 0))), theta, side });
+        }
+      }
+    }
+    return { poses, action: ACTION_SECONDS[t.action] };
+  });
+}
+
+/** Turn the chosen poses into steps: face the leg, drive it, and at the stop face the required heading and act. "fast" chains gentle corners. */
+function buildFromChain(base: Routine, tasks: PlanTask[], chain: Pose[], cfg: RobotConfig, navs: NavOptions[], style: "boomerang" | "chained" | "safe", approachCap: (t: PlanTask) => number): Routine {
+  const fast = style !== "safe";
   const steps: Step[] = [];
-  let cur = { x: base.start.x, y: base.start.y, heading: base.start.heading };
-  const clearance = Math.hypot(cfg.length, cfg.width) / 2 + 1;
-  for (const task of tasks) {
-    const options = sidesFor(task, cfg);
-    const side = options[Math.min(v.sideRank, options.length - 1)];
-    const nat = bearing(cur, task);
-    const theta = task.approach === "auto" ? nat + (task.targetKind === "point" ? 0 : v.offset) : task.approach;
-    const d = standoff(task, cfg, side);
-    const r = (theta * Math.PI) / 180;
-    const lim = fieldSize / 2 - cfg.width / 2;
-    const cl = (v: number) => Math.max(-lim, Math.min(lim, v));
-    // the robot can't stand inside the wall: pieces hugging the perimeter are reached from beside them
-    const target = { x: Math.round(cl(task.x - Math.sin(r) * d) * 4) / 4, y: Math.round(cl(task.y - Math.cos(r) * d) * 4) / 4 };
-    const heading = Math.round(normalize(theta + (side === "back" ? 180 : 0)));
-    const forwards = side === "front";
-    // route around solid elements, keeping only the bends
-    const n = Math.max(2, Math.ceil(dist(cur, target) / 2));
-    const line = Array.from({ length: n + 1 }, (_, i) => ({ x: cur.x + ((target.x - cur.x) * i) / n, y: cur.y + ((target.y - cur.y) * i) / n }));
-    const nav = { obstacles, fieldSize, radius: clearance, wall: cfg.width / 2 };
-    const route = findPath(cur, target, nav) ?? findPath(cur, target, { ...nav, radius: cfg.width / 2 + 1 }) ?? [cur, target];
-    // densify the corners so curve fitting and corner detection see a normal polyline
-    const safe: { x: number; y: number }[] = [];
-    for (let k = 0; k + 1 < route.length; k++) { const seg = Math.max(1, Math.ceil(dist(route[k], route[k + 1]) / 2)); for (let q = 0; q < seg; q++) safe.push({ x: route[k].x + ((route[k + 1].x - route[k].x) * q) / seg, y: route[k].y + ((route[k + 1].y - route[k].y) * q) / seg }); }
-    safe.push(target);
-    void line;
-    const mk = (m: MotionSpec, actions: ActionSpec[] = []): Step => ({ id: uid(), motion: m, actions });
-    const first: ActionSpec[] = [];
-    const last: ActionSpec[] = [];
-    if (task.action === "none") { /* a waypoint: only the user's own actions */ }
-    else if (task.action === "pickup") {
+  const uidStep = (motion: MotionSpec, actions: ActionSpec[] = [], label?: string): Step => ({ id: uid(), motion, actions, label });
+  let cur = { x: base.start.x, y: base.start.y, h: base.start.heading };
+  const timeoutFor = (len: number) => Math.max(1500, Math.ceil(((len / 12) * 1000 + 1500) / 100) * 100);
+  tasks.forEach((task, ti) => {
+    const pose = chain[ti];
+    const path = legPath(cur, pose, navs[ti], cfg);
+    const spdTravel = task.speed ?? (fast ? 127 : 110);
+    const cap = approachCap(task); // a standing Pin or Cup knocked at speed tips over and the pickup then can't take it
+    const group: Step[] = [];
+    let h = cur.h;
+    for (let k = 1; k < path.length; k++) {
+      const from = path[k - 1], to = path[k];
+      if (dist(from, to) < 0.5) continue;
+      const lead = bearing(from, to);
+      const fwd = angleDiff(h, lead), rev = angleDiff(h, lead + 180);
+      const back = rev + 8 < fwd;
+      const legH = back ? lead + 180 : lead;
+      const turn = angleDiff(h, legH);
+      const last = k === path.length - 1;
+      if (style === "boomerang" && last && pose.h !== null && !task.pass) {
+        // one move: drive there and end at the heading the job needs (the controller turns while it drives)
+        const fwdOk = angleDiff(lead, pose.h) <= 90;
+        const bm = defaultMotion("moveToPose", { x: Math.round(to.x * 4) / 4, y: Math.round(to.y * 4) / 4, heading: pose.h });
+        if (bm.type === "moveToPose") { bm.forwards = fwdOk; bm.lead = 0.4; bm.maxSpeed = Math.min(spdTravel, cap); bm.timeout = timeoutFor(dist(from, to)) + 1500; group.push(uidStep(bm)); h = pose.h; continue; }
+      }
+      const gentle = fast && !last && turn < 25;
+      if (turn > 6 && !gentle) group.push(uidStep({ ...defaultMotion("turnToPoint", { x: to.x, y: to.y, heading: 0 }), forwards: !back, timeout: 2500 } as MotionSpec));
+      const mv = defaultMotion("moveToPoint", { x: Math.round(to.x * 4) / 4, y: Math.round(to.y * 4) / 4, heading: 0 });
+      if (mv.type !== "moveToPoint") continue;
+      mv.forwards = !back; mv.maxSpeed = last ? Math.min(spdTravel, cap) : spdTravel; mv.timeout = timeoutFor(dist(from, to)) + (last && cap < spdTravel ? 1200 : 0);
+      if (gentle || (fast && !last && task.pass)) { mv.minSpeed = 45; mv.earlyExit = 6; }
+      if (last && task.pass) { mv.minSpeed = 45; mv.earlyExit = 6; }
+      group.push(uidStep(mv));
+      h = legH;
+    }
+    // arrive facing the way the job needs
+    if (pose.h !== null && angleDiff(h, pose.h) > 2 && !task.pass) group.push(uidStep({ ...defaultMotion("turnToHeading", { x: 0, y: 0, heading: pose.h }), timeout: 2000 } as MotionSpec));
+    if (!group.length) group.push(uidStep({ type: "wait", ms: 50 } as MotionSpec));
+    const first: ActionSpec[] = [], last: ActionSpec[] = [];
+    const side = pose.side;
+    if (task.action === "pickup") {
       first.push({ id: uid("a"), type: side === "front" ? "intakeIn" : "rearIntakeIn", when: { kind: "start" } });
       last.push({ id: uid("a"), type: side === "front" ? "intakeStop" : "rearIntakeStop", when: { kind: "end" } });
     } else if (task.action === "place") last.push({ id: uid("a"), type: "place", when: { kind: "end" } });
-    else last.push({ id: uid("a"), type: "toggleSet", arg: task.toggleColor ?? base.alliance, when: { kind: "end" } });
+    else if (task.action === "toggle") last.push({ id: uid("a"), type: "toggleSet", arg: task.toggleColor ?? base.alliance, when: { kind: "end" } });
     for (const e of task.extra ?? []) (e.when === "start" ? first : last).push({ id: uid("a"), type: e.type, arg: e.arg, when: { kind: e.when } });
-    const spd = task.speed ?? v.speed;
-    const timeoutFor = (len: number) => Math.max(1500, Math.ceil(((len / 12) * 1000 + 1500) / 100) * 100);
-    const group: Step[] = [];
-    if (v.style === "curve") {
-      const segs = fitStroke(safe);
-      const m = defaultMotion("follow", { x: cur.x, y: cur.y, heading: cur.heading });
-      if (m.type !== "follow" || !segs.length) return null;
-      m.forwards = forwards;
-      m.path.segments = segs.map((sg) => ({ p: sg.p.map((q) => ({ x: Math.round(q.x * 100) / 100, y: Math.round(q.y * 100) / 100 })) as typeof sg.p }));
-      m.path.maxSpeed = spd; m.path.minSpeed = Math.min(60, spd);
-      m.timeout = timeoutFor(pathLength(m.path));
-      group.push(mk(m));
-      group.push(mk({ ...defaultMotion("turnToHeading", { x: 0, y: 0, heading }), timeout: 2000 } as MotionSpec));
-    } else {
-      // bends first (intermediate points don't stop), then the approach itself
-      let idx = [0, safe.length - 1];
-      if (safe.length > 3) idx = simplifyIdx(safe, 1.6);
-      let prev: { x: number; y: number } = cur;
-      for (const i of idx.slice(1, -1)) {
-        const p = safe[i];
-        if (dist(prev, p) < 4) continue;
-        const m = defaultMotion("moveToPoint", { x: p.x, y: p.y, heading: 0 });
-        if (m.type === "moveToPoint") { m.forwards = forwards; m.maxSpeed = spd; m.minSpeed = 45; m.earlyExit = 6; m.timeout = timeoutFor(dist(prev, p)); group.push(mk(m)); }
-        prev = p;
-      }
-      const len = dist(prev, target);
-      if (v.style === "pose") {
-        const m = defaultMotion("moveToPose", { x: target.x, y: target.y, heading });
-        if (m.type !== "moveToPose") return null;
-        m.forwards = forwards; m.lead = 0.5; m.maxSpeed = spd; m.timeout = timeoutFor(len);
-        if (task.pass) { m.minSpeed = 45; m.earlyExit = 6; }
-        group.push(mk(m));
-      } else {
-        const m = defaultMotion("moveToPoint", { x: target.x, y: target.y, heading: 0 });
-        if (m.type !== "moveToPoint") return null;
-        m.forwards = forwards; m.maxSpeed = spd; m.timeout = timeoutFor(len);
-        if (task.pass) { m.minSpeed = 45; m.earlyExit = 6; }
-        group.push(mk(m));
-        if (!task.pass && (task.approach !== "auto" || task.targetKind !== "point")) group.push(mk({ ...defaultMotion("turnToHeading", { x: 0, y: 0, heading }), timeout: 2000 } as MotionSpec));
-      }
-    }
     group[0].actions.push(...first);
     group[group.length - 1].actions.push(...last);
     steps.push(...group);
-    cur = { x: target.x, y: target.y, heading };
-  }
+    cur = { x: pose.x, y: pose.y, h: pose.h ?? h };
+  });
   return { ...base, steps };
-}
-
-function simplifyIdx(pts: { x: number; y: number }[], tol: number): number[] {
-  const keep = new Set([0, pts.length - 1]);
-  const rec = (a: number, b: number) => {
-    let worst = -1, wd = 0;
-    const A = pts[a], B = pts[b], L = dist(A, B) || 1;
-    for (let i = a + 1; i < b; i++) { const d = Math.abs((B.x - A.x) * (A.y - pts[i].y) - (A.x - pts[i].x) * (B.y - A.y)) / L; if (d > wd) { wd = d; worst = i; } }
-    if (worst >= 0 && wd > tol) { keep.add(worst); rec(a, worst); rec(worst, b); }
-  };
-  rec(0, pts.length - 1);
-  return [...keep].sort((x, y) => x - y);
 }
 
 /**
@@ -252,18 +235,20 @@ export interface PlanArgs {
 /** Try many ways of driving the task list, simulate each, and return every candidate best-first (working ones ahead of failed ones). */
 export async function planRoutes(a: PlanArgs): Promise<PlanCandidate[]> {
   const { tasks, cfg } = a;
-  const variants: Variant[] = [];
-  const autoApproach = tasks.some((t) => t.approach === "auto" && t.targetKind !== "point");
-  const twoSides = tasks.some((t) => sidesFor(t, cfg).length > 1);
-  for (const sideRank of twoSides ? [0, 1] : [0])
-    for (const offset of autoApproach ? [0, 35, -35] : [0])
-      for (const speed of [127, 90])
-        for (const style of (a.simple ? ["point"] : ["pose", "point", "curve"]) as ("pose" | "point" | "curve")[]) if (speed === 127 || style === "point") variants.push({ style, speed, offset, sideRank });
   const out: PlanCandidate[] = [];
   const limit = a.game.autonSeconds.value;
   // what the route must keep clear of: Goals/Loaders firmly, loose pieces softly (except the ones it is going to pick up)
-  const objects = (a.world.objects as { x: number; y: number; r: number; lying?: boolean; half?: number; stackedIn?: string; nestedIn?: number }[]).filter((o) => !tasks.some((t) => t.action === "pickup" && Math.hypot(t.x - o.x, t.y - o.y) < 9));
-  const navObstacles = avoidList(a.obstacles, objects, DEFAULT_AVOID, a.routine, cfg);
+  const allObjects = a.world.objects as { x: number; y: number; r: number; lying?: boolean; half?: number; stackedIn?: string; nestedIn?: number }[];
+  const fieldSize0 = a.game.fieldSize.value;
+  // legs into a pickup are allowed to reach the piece being picked up; every other leg keeps clear of it (and of all other loose pieces)
+  const navObstaclesFor = (ti: number) => avoidList(a.obstacles, allObjects.filter((o) => !(tasks[ti].action === "pickup" && Math.hypot(tasks[ti].x - o.x, tasks[ti].y - o.y) < 9)), DEFAULT_AVOID, a.routine, cfg);
+  const navObstacles = avoidList(a.obstacles, allObjects, DEFAULT_AVOID, a.routine, cfg);
+  void fieldSize0;
+  const fieldSize = a.game.fieldSize.value;
+  // planning distances use a slim robot (so arrival poses next to a Goal are reachable); the routes actually driven use the full turning radius
+  const navPlan: NavOptions = { obstacles: navObstacles, fieldSize, radius: cfg.width / 2 + 0.5, wall: cfg.width / 2 };
+  const navDrive: NavOptions[] = tasks.map((_, ti) => ({ obstacles: navObstaclesFor(ti), fieldSize, radius: Math.hypot(cfg.length, cfg.width) / 2 + 1, wall: cfg.width / 2 }));
+  const chains = bestChains(a.routine.start, stopSpecs(tasks, cfg, fieldSize), cfg, navPlan, 4);
   const need = { pickup: tasks.filter((t) => t.action === "pickup").length, place: tasks.filter((t) => t.action === "place").length, toggle: tasks.filter((t) => t.action === "toggle").length };
   const evaluate = (r: Routine, style: string): PlanCandidate => {
     let rec = simulate(r, cfg, a.world, { seed: a.seed });
@@ -278,17 +263,27 @@ export async function planRoutes(a: PlanArgs): Promise<PlanCandidate[]> {
     for (const w of rec.warnings) if (/failed|hit its/i.test(w.text) && !problems.some((p) => p.includes(w.text.slice(0, 12)))) problems.push(w.text);
     for (const e of rec.events) if (e.type === "reject" && !problems.includes(e.text ?? "")) problems.push(`could not ${e.text}`);
     for (const f of a.game.check?.({ routine, cfg, recording: rec, world: rec.world }) ?? []) if (f.level === "error") problems.push(f.text);
-    let pushes = 0;
+    let pushes = rec.events.filter((e) => e.type === "tip").length;
     for (const h of routeHits(rec)) { if (h.label === "toggle") continue; if (h.id !== undefined) pushes++; else problems.push(`hits ${h.label} in step ${h.step + 1}`); }
     if (rec.duration > limit + 0.05) problems.push(`takes ${rec.duration.toFixed(1)} s (limit ${limit} s)`);
     return { routine, recording: rec, duration: rec.duration, style, ok: problems.length === 0, problems, pushes };
   };
-  for (let i = 0; i < variants.length; i++) {
+  const cal = calibrate(cfg);
+  const approachCap = (t: PlanTask): number => {
+    if (t.action !== "pickup") return 127;
+    const o = (a.world.objects as { id: number; tip?: NonNullable<GameObject["tip"]>; lying?: boolean }[]).find((q) => q.id === t.refId);
+    if (!o?.tip || o.lying) return 127;
+    return Math.max(20, Math.min(127, Math.round(((tipSpeed(o.tip) * 0.7) / cal.v) * 127)));
+  };
+  const styles: ("boomerang" | "chained" | "safe")[] = a.simple ? ["safe"] : ["boomerang", "chained", "safe"];
+  const total = chains.length * styles.length + 3;
+  let done = 0;
+  for (const chain of chains) for (const style of styles) {
     if (a.shouldStop?.()) break;
-    const v = variants[i];
-    const r = buildRoutine(a.routine, tasks, cfg, navObstacles, a.game.fieldSize.value, v);
-    if (r) out.push(evaluate(r, `${v.style === "pose" ? "boomerang" : v.style === "point" ? "point + turn" : "curve"}, speed ${v.speed}${v.offset ? `, approach ${v.offset > 0 ? "+" : ""}${v.offset}°` : ""}`));
-    a.onProgress?.((i + 1) / (variants.length + 3));
+    const r = buildFromChain(a.routine, tasks, chain.poses, cfg, navDrive, style, approachCap);
+    const sides = [...new Set(chain.poses.map((p) => p.side))].join("+");
+    out.push(evaluate(r, `${style === "boomerang" ? "one smooth move per stop" : style === "chained" ? "chained corners" : "stop-and-turn"}, ${sides}, ~${chain.time.toFixed(1)} s predicted`));
+    a.onProgress?.(++done / total);
     await new Promise((res) => setTimeout(res, 0));
   }
   // second pass: the fastest candidates whose only problem is running into things get repaired by simulation
@@ -298,7 +293,7 @@ export async function planRoutes(a: PlanArgs): Promise<PlanCandidate[]> {
     const c = onlyHits[k];
     const rep = await repairBySim(c.routine, cfg, DEFAULT_AVOID, a.game.fieldSize.value, (r) => simulate(r, cfg, a.world, { seed: a.seed }), a.world.obstacles, a.world.objects as never, undefined, 3);
     if (rep.changed) out.push(evaluate(rep.routine, `${c.style}, re-routed around obstacles`));
-    a.onProgress?.((variants.length + k + 1) / (variants.length + 3));
+    a.onProgress?.((done + k + 1) / total);
   }
   return out.sort((x, y) => Number(y.ok) - Number(x.ok) || x.duration + 0.5 * x.pushes - (y.duration + 0.5 * y.pushes));
 }

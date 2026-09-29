@@ -63,8 +63,23 @@ describe("waypoints and simple mode", () => {
     expect(prep.errors).toEqual([]);
     const res = await planRoutes({ routine, tasks: prep.tasks, cfg, game: override, world, obstacles: override.obstacles, simple: true });
     expect(res.length).toBeGreaterThan(0);
-    for (const c of res) for (const s of c.routine.steps) expect(["moveToPoint", "turnToHeading"]).toContain(s.motion.type);
+    for (const c of res) for (const s of c.routine.steps) expect(["moveToPoint", "turnToHeading", "turnToPoint"]).toContain(s.motion.type);
     const first = res[0].routine.steps.find((s) => s.actions.some((a) => a.type === "clamp"));
     expect(first).toBeDefined();
+  }, 60000);
+});
+
+describe("time model", () => {
+  it("is measured from the robot: drive and turn costs grow with distance/angle, and the DP chain is no slower than any single fixed approach", async () => {
+    const { calibrate, driveTime, turnTime, bestChains } = await import("./timeplan");
+    const c = calibrate(cfg);
+    expect(c.v).toBeGreaterThan(20); expect(c.w).toBeGreaterThan(60);
+    expect(driveTime(c, 48)).toBeGreaterThan(driveTime(c, 12));
+    expect(turnTime(c, 180)).toBeGreaterThan(turnTime(c, 45));
+    const nav = { obstacles: override.obstacles, fieldSize: 144, radius: 8, wall: 7.5 };
+    const mk = (thetas: number[]) => [{ x: -30, y: -10 }, { x: 30, y: 20 }].map((t) => ({ action: 0.3, poses: thetas.map((th) => ({ x: t.x - Math.sin((th * Math.PI) / 180) * 13, y: t.y - Math.cos((th * Math.PI) / 180) * 13, h: th, theta: th, side: "front" as const })) }));
+    const all = bestChains({ x: -60, y: 0, heading: 90 }, mk(Array.from({ length: 16 }, (_, i) => i * 22.5)), cfg, nav, 3)[0].time;
+    const fixed = bestChains({ x: -60, y: 0, heading: 90 }, mk([0]), cfg, nav, 3)[0].time;
+    expect(all).toBeLessThanOrEqual(fixed + 1e-9);
   }, 60000);
 });

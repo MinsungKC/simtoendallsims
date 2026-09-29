@@ -114,3 +114,31 @@ export function firstBlocked(pts: Vec[], o: NavOptions, freeR = 6): number {
   }
   return -1;
 }
+
+/** Shortest-path distances (inches, soft pieces cost extra) from `from` to every cell; read with `.at(x, y)`. */
+export function distanceField(from: Vec, o: NavOptions, freeR = 6): { at: (x: number, y: number) => number } {
+  const g0 = build(o);
+  const g: Grid = { ...g0, blocked: g0.blocked.slice() };
+  const [ci, cj] = idx(g, from.x, from.y);
+  for (let j = cj - freeR; j <= cj + freeR; j++) for (let i = ci - freeR; i <= ci + freeR; i++) if (i >= 0 && j >= 0 && i < g.n && j < g.n && Math.hypot(i - ci, j - cj) <= freeR) g.blocked[j * g.n + i] = 0;
+  const N = g.n;
+  const dist = new Float64Array(N * N).fill(Infinity);
+  const heap: [number, number][] = [[0, cj * N + ci]];
+  dist[cj * N + ci] = 0;
+  const push = (f: number, k: number) => { heap.push([f, k]); let c = heap.length - 1; while (c > 0) { const p = (c - 1) >> 1; if (heap[p][0] <= heap[c][0]) break; [heap[p], heap[c]] = [heap[c], heap[p]]; c = p; } };
+  const pop = () => { const top = heap[0]; const last = heap.pop()!; if (heap.length) { heap[0] = last; let c = 0; for (;;) { const l = 2 * c + 1, r = l + 1; let m = c; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === c) break; [heap[m], heap[c]] = [heap[c], heap[m]]; c = m; } } return top; };
+  while (heap.length) {
+    const [d, k] = pop();
+    if (d > dist[k]) continue;
+    const i0 = k % N, j0 = (k / N) | 0;
+    for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+      if (!di && !dj) continue;
+      const ni = i0 + di, nj = j0 + dj;
+      if (ni < 0 || nj < 0 || ni >= N || nj >= N || g.blocked[nj * N + ni] === 1) continue;
+      if (di && dj && (g.blocked[j0 * N + ni] === 1 || g.blocked[nj * N + i0] === 1)) continue;
+      const nd = d + (di && dj ? Math.SQRT2 : 1) * (g.blocked[nj * N + ni] === 2 ? 15 : 1);
+      if (nd < dist[nj * N + ni]) { dist[nj * N + ni] = nd; push(nd, nj * N + ni); }
+    }
+  }
+  return { at: (x, y) => { const [i, j] = idx(g, x, y); return dist[j * N + i]; } };
+}

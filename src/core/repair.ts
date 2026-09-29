@@ -128,9 +128,10 @@ export function routeHits(rec: import("./runtime").Recording): RouteHit[] {
   const stepAt = (t: number) => rec.steps.find((s) => t >= s.start - 1e-6 && t <= s.end + 1e-6)?.index ?? rec.steps.at(-1)?.index ?? 0;
   for (const e of rec.events) {
     if (e.type !== "hit") continue;
-    const later = rec.events.filter((q) => q.t >= e.t - 0.05 && q.t <= e.t + 1.5);
+    const later = rec.events.filter((q) => q.t >= e.t - 0.05 && q.t <= e.t + 4);
     if (e.id !== undefined && later.some((q) => q.type === "pickup" && q.id === e.id)) continue;
-    if (e.id === undefined && later.some((q) => q.type === "place" && q.goal === e.text)) continue;
+    // touching a Goal you score in (arriving at it, or turning next to it afterwards) is part of scoring there
+    if (e.id === undefined && rec.events.some((q) => q.type === "place" && q.goal === e.text)) continue;
     if (later.some((q) => q.type === "toggle") && /toggle/i.test(e.text ?? "")) continue;
     // brushing the neighbours of a piece while going in to pick it up is part of picking it up
     if (e.id !== undefined && pickups.some((p) => Math.abs(p.t - e.t) < 2.5 && Math.hypot((e.x ?? 0) - p.x, (e.y ?? 0) - p.y) < 14)) continue;
