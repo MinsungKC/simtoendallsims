@@ -33,7 +33,10 @@ export interface Warning {
 
 export interface StepTiming { index: number; start: number; end: number; timedOut: boolean }
 
+export interface TriggerFire { step: number; actionId: string; offsetMs: number; distance: number }
+
 export interface Recording {
+  triggers: TriggerFire[];
   frames: Frame[];
   warnings: Warning[];
   steps: StepTiming[];
@@ -67,6 +70,7 @@ export function simulate(routine: Routine, cfg: RobotConfig, init: WorldInit, op
   const frames: Frame[] = [];
   const warnings: Warning[] = [];
   const timings: StepTiming[] = [];
+  const triggers: TriggerFire[] = [];
   const maxTime = opts.maxTime ?? 60;
   const clampDelay = opts.clampDelay ?? 0.12;
   const dt = { trackWidth: cfg.trackWidth, horizontalDrift: cfg.horizontalDrift };
@@ -122,9 +126,18 @@ export function simulate(routine: Routine, cfg: RobotConfig, init: WorldInit, op
     const startMs = nowMs;
     pending = step.actions.map((a) => ({ a, fireAt: 0 }));
     const endActions = pending.filter((p) => p.a.when.kind === "end");
-    const live = pending.filter((p) => p.a.when.kind !== "end");
-    // start-triggered fire immediately
-    for (const p of live) if (p.a.when.kind === "start") { fireAction(p.a); p.fireAt = -1; }
+    // start-triggered actions fire immediately; the rest fire strictly in list order, exactly like the
+    // generated code (waitUntil / delay are sequential statements)
+    for (const p of pending) if (p.a.when.kind === "start") { fireAction(p.a); p.fireAt = -1; }
+    const queue = pending.filter((p) => p.a.when.kind === "distance" || p.a.when.kind === "delay");
+    let qi = 0;
+    const fireQueued = (): void => {
+      const p = queue[qi];
+      p.fireAt = -1;
+      triggers.push({ step: stepIdx, actionId: p.a.id, offsetMs: nowMs - startMs, distance: motion ? Math.max(0, motion.distTraveled) : 0 });
+      fireAction(p.a);
+      qi++;
+    };
     const timing: StepTiming = { index: stepIdx, start: startT, end: startT, timedOut: false };
     timings.push(timing);
     let done = false;
@@ -140,22 +153,21 @@ export function simulate(routine: Routine, cfg: RobotConfig, init: WorldInit, op
         cmdL = 0; cmdR = 0; holdL = false; holdR = false;
         done = nowMs - startMs >= waitMs;
       }
-      for (const p of live) {
-        if (p.fireAt === -1) continue;
-        const w = p.a.when;
-        if (w.kind === "distance" && motion && motion.distTraveled > w.value) { fireAction(p.a); p.fireAt = -1; }
-        else if (w.kind === "delay" && nowMs - startMs >= w.ms) { fireAction(p.a); p.fireAt = -1; }
+      while (qi < queue.length) {
+        const w = queue[qi].a.when;
+        const hit = (w.kind === "distance" && motion && motion.distTraveled > w.value) || (w.kind === "delay" && nowMs - startMs >= w.ms);
+        if (!hit) break;
+        fireQueued();
       }
       advance(); advance();
     }
     cmdL = 0; cmdR = 0; holdL = false; holdR = false;
     // any triggers that never fired still run at the end (matching generated code, which emits them
     // after waitUntilDone if distance was never reached would hang -> flag it)
-    for (const p of live) {
-      if (p.fireAt !== -1) {
-        warnings.push({ t: world.t, step: stepIdx, text: `Action "${p.a.type}" trigger (${describeTrigger(p.a.when)}) was never reached - it would only fire after the motion in generated code` });
-        fireAction(p.a);
-      }
+    while (qi < queue.length) {
+      const p = queue[qi];
+      warnings.push({ t: world.t, step: stepIdx, text: `Action "${p.a.type}" trigger (${describeTrigger(p.a.when)}) was never reached during the motion - in generated code it would fire after the motion ends` });
+      fireQueued();
     }
     for (const p of endActions) fireAction(p.a);
     timing.end = world.t;
@@ -188,7 +200,7 @@ export function simulate(routine: Routine, cfg: RobotConfig, init: WorldInit, op
   if (frames.length && frames[frames.length - 1].t > 15.001) {
     warnings.push({ t: 15, step: -1, text: `Routine runs ${frames[frames.length - 1].t.toFixed(1)} s - autonomous period is 15 s` });
   }
-  return { frames, warnings, steps: timings, duration: world.t, contacts: world.contacts, world };
+  return { frames, warnings, steps: timings, triggers, duration: world.t, contacts: world.contacts, world };
 }
 
 function describeTrigger(t: ActionSpec["when"]): string {
