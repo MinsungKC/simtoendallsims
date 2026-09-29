@@ -20,33 +20,41 @@ const dist = (a: Vec, b: Vec) => Math.hypot(a.x - b.x, a.y - b.y);
 
 /** Push every point out of the inflated obstacles and inside the walls, then relax so the detour is a smooth bend. */
 export function avoidObstacles(path: Vec[], o: Pick<AutoRouteOptions, "obstacles" | "fieldSize" | "clearance">): Vec[] {
-  const polys = o.obstacles.map(obstaclePoly);
+  // soft, small keep-outs (loose pieces) first and the big ones (Goals) last, so a Goal's clearance wins a conflict
+  const ordered = [...o.obstacles].sort((a, b) => (a.keepOut ?? o.clearance) - (b.keepOut ?? o.clearance));
+  const polys = ordered.map(obstaclePoly);
+  const clr = ordered.map((ob) => ob.keepOut ?? o.clearance);
   const lim = o.fieldSize / 2 - o.clearance;
   let pts = path.map((p) => ({ ...p }));
-  for (let pass = 0; pass < 4; pass++) {
+  for (let pass = 0; pass < 7; pass++) {
     for (let i = 0; i < pts.length; i++) {
       const p = pts[i];
-      for (const poly of polys) {
+      for (let pi = 0; pi < polys.length; pi++) {
+        const poly = polys[pi];
+        const clearance = clr[pi];
         const cp = closestOnPoly(poly, p.x, p.y);
         const d = cp.inside ? 0 : dist(p, cp);
-        if (d >= o.clearance) continue;
+        if (d >= clearance) continue;
         let dx = p.x - cp.x, dy = p.y - cp.y;
         if (cp.inside || d < 1e-6) {
           const cx = poly.reduce((a, q) => a + q.x, 0) / poly.length, cy = poly.reduce((a, q) => a + q.y, 0) / poly.length;
-          dx = p.x - cx; dy = p.y - cy;
-          const l = Math.hypot(dx, dy) || 1;
-          // leave through the boundary along the ray from the center
-          let out = { x: cp.x, y: cp.y };
-          for (let t = 0; t < 40; t++) { const q = { x: cx + (dx / l) * t, y: cy + (dy / l) * t }; if (closestOnPoly(poly, q.x, q.y).inside) out = q; else break; }
-          p.x = out.x + (dx / l) * o.clearance; p.y = out.y + (dy / l) * o.clearance;
+          // leave sideways: perpendicular to the path here, on the side the point already leans toward
+          const a0 = pts[Math.max(0, i - 1)], b0 = pts[Math.min(pts.length - 1, i + 1)];
+          let tx = b0.x - a0.x, ty = b0.y - a0.y;
+          const tl = Math.hypot(tx, ty) || 1; tx /= tl; ty /= tl;
+          let nx = -ty, ny = tx;
+          if ((p.x - cx) * nx + (p.y - cy) * ny < 0) { nx = -nx; ny = -ny; }
+          let out = { x: p.x, y: p.y };
+          for (let t = 0; t < 60; t += 0.25) { const q = { x: p.x + nx * t, y: p.y + ny * t }; out = q; if (!closestOnPoly(poly, q.x, q.y).inside) break; }
+          p.x = out.x + nx * clearance; p.y = out.y + ny * clearance;
         } else {
-          p.x = cp.x + (dx / d) * o.clearance; p.y = cp.y + (dy / d) * o.clearance;
+          p.x = cp.x + (dx / d) * clearance; p.y = cp.y + (dy / d) * clearance;
         }
       }
       p.x = Math.max(-lim, Math.min(lim, p.x)); p.y = Math.max(-lim, Math.min(lim, p.y));
     }
     // relax interior points toward their neighbours' average so pushed points blend into a bend (endpoints stay)
-    if (pass < 3) pts = pts.map((p, i) => (i === 0 || i === pts.length - 1 ? p : { x: (pts[i - 1].x + 2 * p.x + pts[i + 1].x) / 4, y: (pts[i - 1].y + 2 * p.y + pts[i + 1].y) / 4 }));
+    if (pass < 5) pts = pts.map((p, i) => (i === 0 || i === pts.length - 1 ? p : { x: (pts[i - 1].x + 2 * p.x + pts[i + 1].x) / 4, y: (pts[i - 1].y + 2 * p.y + pts[i + 1].y) / 4 }));
   }
   return pts;
 }
@@ -111,3 +119,53 @@ export function routeFromStroke(stroke: Vec[], o: AutoRouteOptions): MotionSpec[
   }
   return out;
 }
+
+/** A freehand stroke as straight legs: smoothed, pushed clear of obstacles, reduced to its corners. Returns the points AFTER `from`. */
+export function polylineFromStroke(stroke: Vec[], o: Pick<AutoRouteOptions, "obstacles" | "fieldSize" | "clearance" | "from">, tol = 2.5, minLeg = 6): Vec[] {
+  const smooth = smoothStroke([o.from, ...stroke], 2);
+  if (smooth.length < 2) return [];
+  const safe = avoidObstacles(smooth, o);
+  let idx = simplify(safe, tol);
+  // corner-cutting guard: a straight leg between two kept points may still clip an obstacle the curve went around.
+  // Where it does, bring back the sample point that hugs the obstacle most, until every leg keeps its clearance.
+  const polys = o.obstacles.map(obstaclePoly);
+  const kos = o.obstacles.map((ob) => ob.keepOut ?? o.clearance);
+  // clearance beyond each obstacle's own keep-out (negative = too close)
+  const clearAt = (q: Vec): number => { let w = Infinity; polys.forEach((poly, pi) => { const c = closestOnPoly(poly, q.x, q.y); w = Math.min(w, (c.inside ? 0 : dist(q, c)) - kos[pi] + o.clearance); }); return w; };
+  // slack = how much closer to an obstacle the straight leg gets than the avoided curve it replaces (0 = no worse)
+  const legSlack = (i0: number, i1: number): number => {
+    const a = safe[i0], b = safe[i1];
+    const n = Math.max(1, Math.ceil(dist(a, b)));
+    let worst = Infinity;
+    for (let k = 0; k <= n; k++) {
+      const t = k / n;
+      const q = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+      const ref = safe[i0 + Math.round(t * (i1 - i0))];
+      worst = Math.min(worst, clearAt(q) - Math.min(clearAt(ref), o.clearance) + 2);
+    }
+    return worst;
+  };
+  for (let guard = 0; guard < 60; guard++) {
+    let fixed = true;
+    for (let k = 0; k + 1 < idx.length && fixed; k++) {
+      if (legSlack(idx[k], idx[k + 1]) >= 0 || idx[k + 1] - idx[k] < 2) continue;
+      // add the sample between them that is farthest from the chord on the safe side
+      let best = idx[k] + 1, bd = -1;
+      for (let i = idx[k] + 1; i < idx[k + 1]; i++) { const d = Math.abs((safe[idx[k + 1]].x - safe[idx[k]].x) * (safe[idx[k]].y - safe[i].y) - (safe[idx[k]].x - safe[i].x) * (safe[idx[k + 1]].y - safe[idx[k]].y)); if (d > bd) { bd = d; best = i; } }
+      idx = [...idx.slice(0, k + 1), best, ...idx.slice(k + 1)];
+      fixed = false;
+    }
+    if (fixed) break;
+  }
+  const out: Vec[] = [];
+  let prev = safe[idx[0]];
+  for (const i of idx.slice(1)) {
+    const p = safe[i];
+    if (i !== idx[idx.length - 1] && dist(prev, p) < minLeg) continue;
+    out.push({ x: Math.round(p.x * 4) / 4, y: Math.round(p.y * 4) / 4 });
+    prev = p;
+  }
+  return out;
+}
+
+export { simplify as simplifyPolyline };

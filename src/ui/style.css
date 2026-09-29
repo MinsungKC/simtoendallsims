@@ -115,3 +115,4 @@ details.adv > summary { cursor: pointer; font-size: 12px; opacity: .8; }
 .view { position: relative; font-size: 13px; }
 .view > summary { cursor: pointer; display: inline-block; padding: 4px 10px; border: 1px solid var(--border, #8886); border-radius: 8px; }
 .view > div { position: absolute; z-index: 20; background: var(--panel, #fff); border: 1px solid var(--border, #8886); border-radius: 10px; padding: 8px 12px; display: grid; gap: 4px; box-shadow: 0 6px 20px #0003; }
+.simple { font-size: 13px; display: inline-flex; gap: 6px; align-items: center; }

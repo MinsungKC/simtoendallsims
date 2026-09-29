@@ -48,6 +48,8 @@ export interface GameObject {
 }
 
 export interface Obstacle {
+  /** Route planning only: keep the robot's center at least this far away (default: the planner's clearance) */
+  keepOut?: number;
   x: number;
   y: number;
   w: number;

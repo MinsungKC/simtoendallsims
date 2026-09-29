@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fitStroke } from "../core/fit";
-import { avoidObstacles } from "../core/autoroute";
+import { avoidObstacles, polylineFromStroke } from "../core/autoroute";
+import { avoidList, robotRadius } from "../core/repair";
 import { forwardOf, rightOf } from "../core/geometry";
 import { planPoses } from "../core/common-plan";
 import { pathLength, samplePath } from "../core/path";
@@ -15,7 +16,7 @@ import { useStore } from "./store";
 import { worldInit, type CustomField } from "../games/types";
 
 interface Handle {
-  kind: "start" | "start-heading" | "step" | "step-heading" | "ctrl" | "object";
+  kind: "start" | "start-heading" | "step" | "step-heading" | "ctrl" | "object" | "task";
   id?: string;
   seg?: number;
   idx?: number;
@@ -217,13 +218,15 @@ export function FieldCanvas() {
       ctx.strokeStyle = "rgba(255,255,255,0.35)"; ctx.lineWidth = 1.5; ctx.beginPath();
       ink.forEach((q, i) => (i ? ctx.lineTo(px(q.x), py(q.y)) : ctx.moveTo(px(q.x), py(q.y)))); ctx.stroke();
       const g0 = useStore.getState().game();
-      const sm = samplePath({ segments: fitStroke(avoidObstacles(ink, { obstacles: useStore.getState().customField?.obstacles ?? g0.obstacles, fieldSize, clearance: robot.width / 2 + 1 })), maxSpeed: 0, minSpeed: 0, decel: 0, spacing: 1 });
+      const sm = samplePath({ segments: fitStroke(avoidObstacles(ink, { obstacles: avoidList(useStore.getState().customField?.obstacles ?? g0.obstacles, useStore.getState().customField?.objects ?? g0.objects, useStore.getState().avoid, routine, robot), fieldSize, clearance: robotRadius(robot) + useStore.getState().avoid.margin })), maxSpeed: 0, minSpeed: 0, decel: 0, spacing: 1 });
       ctx.strokeStyle = "#f0b34a"; ctx.lineWidth = 3; ctx.beginPath();
       sm.forEach((q, i) => (i ? ctx.lineTo(px(q.x), py(q.y)) : ctx.moveTo(px(q.x), py(q.y)))); ctx.stroke();
     }
 
     // planner targets
+    if (tasks.length > 1) { ctx.setLineDash([3, 4]); ctx.strokeStyle = "#ffd24a99"; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(px(routine.start.x), py(routine.start.y)); tasks.forEach((t) => ctx.lineTo(px(t.x), py(t.y))); ctx.stroke(); ctx.setLineDash([]); }
     tasks.forEach((t, i) => {
+      if (t.targetKind === "point") handles.current.push({ kind: "task", id: t.id, x: t.x, y: t.y, r: 10 });
       ctx.beginPath(); ctx.arc(px(t.x), py(t.y), Math.max(9, 3.5 * S), 0, Math.PI * 2); ctx.strokeStyle = "#ffd24a"; ctx.lineWidth = 2.5; ctx.stroke();
       ctx.fillStyle = "#ffd24a"; ctx.font = "bold 11px system-ui"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(String(i + 1), px(t.x) + Math.max(9, 3.5 * S) + 7, py(t.y) - Math.max(9, 3.5 * S) - 2);
       if (t.approach !== "auto") { const f = forwardOf(t.approach); ctx.beginPath(); ctx.moveTo(px(t.x - f.x * 8), py(t.y - f.y * 8)); ctx.lineTo(px(t.x), py(t.y)); ctx.stroke(); }
@@ -353,6 +356,7 @@ export function FieldCanvas() {
       for (const q of objs) cands.push({ d: Math.hypot(q.x - p.x, q.y - p.y) - q.r, t: { label: q.kind === "cup" ? "Cup" : q.kind === "pin" ? "Pin" : q.kind, x: q.x, y: q.y, targetKind: "object", action: "pickup", side: "auto", approach: "auto", lying: !!q.lying, refId: q.id, pieceKind: q.kind } });
       cands.sort((a, b) => a.d - b.d);
       if (cands[0] && cands[0].d < 4) st.addTask(cands[0].t);
+      else st.addTask({ label: `Point ${st.tasks.filter((t) => t.targetKind === "point").length + 1}`, x: Math.round(p.x * 4) / 4, y: Math.round(p.y * 4) / 4, targetKind: "point", action: "none", side: "auto", approach: "auto" });
       return;
     }
     // add-step tools
@@ -389,6 +393,7 @@ export function FieldCanvas() {
     const y = snap(Math.max(-fieldSize / 2, Math.min(fieldSize / 2, p.y)));
     if (h.kind === "start") st.setRoutine({ start: { ...st.routine.start, x, y } }, { history: false });
     else if (h.kind === "start-heading") st.setRoutine({ start: { ...st.routine.start, heading: Math.round(bearingDeg(st.routine.start, { x, y })) } }, { history: false });
+    else if (h.kind === "task" && h.id) st.updateTask(h.id, { x, y });
     else if (h.kind === "step" && h.id) {
       const step = st.routine.steps.find((s) => s.id === h.id);
       if (step && "x" in step.motion) st.updateMotion(h.id, { x, y } as never, { history: false });
@@ -423,9 +428,16 @@ export function FieldCanvas() {
     const st = useStore.getState();
     const last = planPoses(st.routine, st.robot).after.at(-1) ?? { ...st.routine.start };
     const g = st.game();
-    const obstacles = st.customField ? st.customField.obstacles : g.obstacles;
+    const obstacles = avoidList(st.customField ? st.customField.obstacles : g.obstacles, st.customField ? st.customField.objects : g.objects, st.avoid, st.routine, st.robot);
+    if (st.simple) {
+      // simple mode: straight legs only
+      const legs = polylineFromStroke(ink, { obstacles, fieldSize, clearance: robotRadius(st.robot) + st.avoid.margin, from: { x: last.x, y: last.y } }, 4, 10);
+      let prev = { x: last.x, y: last.y };
+      st.addSteps(legs.map((q) => { const m = defaultMotion("moveToPoint", { x: q.x, y: q.y, heading: 0 }); if (m.type === "moveToPoint") { m.forwards = !st.drawReverse; m.timeout = Math.max(1500, Math.ceil(((Math.hypot(q.x - prev.x, q.y - prev.y) / 15) * 1000 + 1500) / 100) * 100); } prev = q; return m; }));
+      return;
+    }
     // one smooth curve (obstacle-avoided, tangent-continuous), then a turn that sets the ending face
-    const safe = avoidObstacles([{ x: last.x, y: last.y }, ...ink], { obstacles, fieldSize, clearance: st.robot.width / 2 + 1 });
+    const safe = avoidObstacles([{ x: last.x, y: last.y }, ...ink], { obstacles, fieldSize, clearance: robotRadius(st.robot) + st.avoid.margin });
     const segments = fitStroke(safe);
     if (!segments.length) return;
     const m = defaultMotion("follow", { x: last.x, y: last.y, heading: last.heading });

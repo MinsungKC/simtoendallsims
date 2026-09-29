@@ -1,7 +1,12 @@
 import { useState } from "react";
-import { Num, Section, Sel } from "./atoms";
+import { Check, Num, Section, Sel } from "./atoms";
 import { useEditor } from "./store";
 import { topThree } from "../core/planner";
+
+const EXTRA: { label: string; type: import("../core/routine").ActionType; when: "start" | "end"; arg?: string }[] = [
+  { label: "Front intake on", type: "intakeIn", when: "start" }, { label: "Intake off", type: "intakeStop", when: "end" },
+  { label: "Rear intake on", type: "rearIntakeIn", when: "start" }, { label: "Clamp", type: "clamp", when: "end" }, { label: "Release", type: "unclamp", when: "end" }, { label: "Place", type: "place", when: "end" },
+];
 
 const ACTION_LABEL = { pickup: "Pick up", place: "Score / place", toggle: "Flip toggle" } as const;
 
@@ -14,17 +19,24 @@ export function PlanPanel() {
   const failed = st.plans ? st.plans.filter((p) => !p.ok) : [];
   return (
     <Section title={`Plan by targets (${tasks.length})`} open={open || tasks.length > 0} right={tasks.length ? <button onClick={st.clearTasks}>Clear</button> : undefined}>
-      {tasks.length === 0 && <p className="note">Choose <b>🎯 Pick targets</b> in the toolbar, then click the goals, pieces or toggles you want to visit, in order. Then pick how to arrive and what to do, and get the 3 fastest routes that work.</p>}
+      {tasks.length === 0 && <p className="note">Choose <b>🎯 Pick targets</b> in the toolbar, then click goals, pieces or toggles - or empty field for a waypoint - in the order you want to visit them (drag waypoints to move them). Then pick how to arrive and what to do, and get the 3 fastest routes that work.</p>}
       {tasks.map((t, i) => (
         <div className="card" key={t.id}>
           <div className="row two"><b>{i + 1}. {t.label}</b>
             <span className="btns inline"><button disabled={i === 0} onClick={() => st.moveTask(t.id, -1)}>↑</button><button disabled={i === tasks.length - 1} onClick={() => st.moveTask(t.id, 1)}>↓</button><button onClick={() => st.removeTask(t.id)}>✕</button></span>
           </div>
-          <Sel label="Do" value={t.action} options={(Object.keys(ACTION_LABEL) as (keyof typeof ACTION_LABEL)[]).map((v) => ({ value: v, label: ACTION_LABEL[v] }))} onChange={(action) => st.updateTask(t.id, { action })} />
-          <Sel label="With the" value={t.side} options={[{ value: "auto", label: "Best end (auto)" }, { value: "front", label: "Front" }, { value: "back", label: "Back" }]} onChange={(side) => st.updateTask(t.id, { side })} />
-          <Sel label="Arrive heading" value={t.approach === "auto" ? "auto" : "set"} options={[{ value: "auto", label: "Auto (try several)" }, { value: "set", label: "I choose…" }]} onChange={(v) => st.updateTask(t.id, { approach: v === "auto" ? "auto" : 0 })} />
-          {t.approach !== "auto" && <Num label="Heading" value={t.approach} onChange={(v) => st.updateTask(t.id, { approach: v })} unit="°" hint="Direction the robot travels as it approaches: 0 = up the field, 90 = right, clockwise." />}
+          {t.targetKind !== "point" && <Sel label="Do" value={t.action} options={(Object.keys(ACTION_LABEL) as (keyof typeof ACTION_LABEL)[]).map((v) => ({ value: v, label: ACTION_LABEL[v] }))} onChange={(action) => st.updateTask(t.id, { action })} />}
+          <Sel label={t.targetKind === "point" ? "Leads with" : "With the"} value={t.side} options={[{ value: "auto", label: t.targetKind === "point" ? "Front" : "Best end (auto)" }, { value: "front", label: "Front" }, { value: "back", label: "Back" }]} onChange={(side) => st.updateTask(t.id, { side })} />
+          <Sel label={t.targetKind === "point" ? "Heading there" : "Arrive heading"} value={t.approach === "auto" ? "auto" : "set"} options={[{ value: "auto", label: t.targetKind === "point" ? "Direction of travel" : "Auto (try several)" }, { value: "set", label: "I choose…" }]} onChange={(v) => st.updateTask(t.id, { approach: v === "auto" ? "auto" : 0 })} />
+          {t.approach !== "auto" && <Num label="Heading" value={t.approach} onChange={(v) => st.updateTask(t.id, { approach: v })} unit="°" hint="Direction the robot points/travels here: 0 = up the field, 90 = right, clockwise." />}
+          <Num label="Speed" value={t.speed ?? 127} onChange={(v) => st.updateTask(t.id, { speed: v })} min={10} max={127} hint="0-127 for the leg into this stop" />
+          <Check label="Drive through (don't stop)" value={!!t.pass} onChange={(pass) => st.updateTask(t.id, { pass })} />
+          {t.targetKind === "point" && <><Num label="X" value={t.x} onChange={(x) => st.updateTask(t.id, { x })} step={0.5} unit="in" /><Num label="Y" value={t.y} onChange={(y) => st.updateTask(t.id, { y })} step={0.5} unit="in" /></>}
           {t.action === "toggle" && <Sel label="Set to" value={t.toggleColor ?? st.routine.alliance} options={[{ value: "red", label: "red" }, { value: "blue", label: "blue" }, { value: "yellow", label: "yellow" }]} onChange={(toggleColor) => st.updateTask(t.id, { toggleColor })} />}
+          <div className="chips">
+            {EXTRA.map((e) => <button key={e.label} onClick={() => st.updateTask(t.id, { extra: [...(t.extra ?? []), { type: e.type, when: e.when, arg: e.arg }] })}>+ {e.label}</button>)}
+          </div>
+          {(t.extra ?? []).length > 0 && <ul className="done">{t.extra!.map((e, k) => <li key={k}>{e.type} <i>{e.when === "start" ? "on arrival at the leg start" : "when done"}</i><button className="x" onClick={() => st.updateTask(t.id, { extra: t.extra!.filter((_, j) => j !== k) })}>✕</button></li>)}</ul>}
         </div>
       ))}
       {tasks.length > 0 && (

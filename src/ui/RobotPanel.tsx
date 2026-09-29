@@ -12,6 +12,8 @@ export function RobotPanel() {
   const d = derive(robot);
   const budget = motorBudget({ count: robot.motorsPerSide * 2, watts: robot.motorWatts }, robot.otherMotorsW, game.robotRules);
   const [tuning, setTuning] = useState<string | null>(null);
+  const [prevGains, setPrevGains] = useState<{ lateral: RobotConfig["lateral"]; angular: RobotConfig["angular"] } | null>(null);
+  const [mode, setMode] = useState<"safe" | "fast">("safe");
   const set = <K extends keyof RobotConfig>(k: K) => (v: RobotConfig[K]) => setRobot({ [k]: v } as Partial<RobotConfig>);
 
   const setWheelCount = (n: number) => {
@@ -23,8 +25,11 @@ export function RobotPanel() {
 
   const tune = () => {
     setTuning("Tuning… 0%");
+    const before = { lateral: robot.lateral, angular: robot.angular };
     const done = (r: ReturnType<typeof autoTune>) => {
-      setRobot({ lateral: r.lateral, angular: r.angular, horizontalDrift: r.horizontalDrift });
+      if (r.kept) { setTuning("Your current gains already do as well as anything the search found on smooth-auton motions, so nothing was changed."); return; }
+      setPrevGains(before);
+      setRobot({ lateral: r.lateral, angular: r.angular });
       setTuning(`Done. Test-motion cost ${r.score.before.toFixed(2)} → ${r.score.after.toFixed(2)} (lower is better). Lateral kP ${r.lateral.kP}, kD ${r.lateral.kD}; angular kP ${r.angular.kP}, kD ${r.angular.kD}. These are starting points for the real robot.`);
     };
     try {
@@ -33,10 +38,10 @@ export function RobotPanel() {
         if (e.data.progress !== undefined) setTuning(`Tuning… ${Math.round(e.data.progress * 100)}%`);
         if (e.data.result) { done(e.data.result); w.terminate(); }
       };
-      w.onerror = () => { w.terminate(); setTimeout(() => done(autoTune(robot)), 20); };
-      w.postMessage({ cfg: robot });
+      w.onerror = () => { w.terminate(); setTimeout(() => done(autoTune(robot, undefined, mode)), 20); };
+      w.postMessage({ cfg: robot, mode });
     } catch {
-      setTimeout(() => done(autoTune(robot)), 20); // no worker support: run inline
+      setTimeout(() => done(autoTune(robot, undefined, mode)), 20); // no worker support: run inline
     }
   };
 
@@ -176,8 +181,9 @@ export function RobotPanel() {
         <Num label="Wheel scale error" value={robot.odom.wheelScaleError} onChange={(v) => setRobot({ odom: { ...robot.odom, wheelScaleError: v } })} step={0.001} />
       </Section>
 
-      <Section title="Controller gains (LemLib layout)" right={<button onClick={tune}>Auto-tune</button>}>
+      <Section title="Controller gains (LemLib layout)" right={<span className="btns inline"><select value={mode} onChange={(e) => setMode(e.target.value as "safe" | "fast")} title="Safe stops short and avoids overshoot; Fast trades a little overshoot for time"><option value="safe">Safe</option><option value="fast">Fast</option></select><button onClick={tune}>Auto-tune</button></span>}>
         {tuning && <p className="note">{tuning}</p>}
+        {prevGains && <button onClick={() => { setRobot(prevGains); setPrevGains(null); setTuning("Restored your previous gains."); }}>Undo auto-tune (restore previous gains)</button>}
         <p className="note">Lateral (distance) PID</p>
         <GainEditor g={robot.lateral} onChange={(g) => setRobot({ lateral: g })} unit="in" />
         <p className="note">Angular (turn) PID</p>

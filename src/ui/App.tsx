@@ -131,6 +131,7 @@ export function App() {
         <button onClick={st.redo} disabled={!st.future.length} title="Redo (Ctrl+Shift+Z)">↷</button>
         <button onClick={save}>Save</button>
         <button onClick={() => fileRef.current?.click()}>Open</button>
+        <label className="simple" title="Only straight legs: draw a path or pick targets, nothing else"><input type="checkbox" checked={st.simple} onChange={(e) => st.setSimple(e.target.checked)} /> Simple mode</label>
         <button className="primary" onClick={() => setTab("code")} title="Generate the robot code for this route">Get code ▸</button>
         <input ref={fileRef} type="file" accept=".json,application/json" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) void load(f); e.target.value = ""; }} />
       </header>
@@ -149,7 +150,7 @@ export function App() {
         <div className="toolbar">
           <button className="primary" onClick={() => { const g = useStore.getState(); if (!g.playing && g.recording && g.time >= g.recording.duration - 0.01) g.setTime(0); g.setPlaying(!g.playing); }} title="Play / pause (Space)">{playing ? "❚❚ Pause" : "▶ Play"}</button>
           <span className="sep" />
-          {TOOLS.map((t) => <button key={t.id} className={st.tool === t.id ? "active" : ""} title={t.hint} onClick={() => st.setTool(t.id)}>{t.label}</button>)}
+          {TOOLS.filter((t) => !st.simple || ["draw", "targets", "select"].includes(t.id)).map((t) => <button key={t.id} className={st.tool === t.id ? "active" : ""} title={t.hint} onClick={() => st.setTool(t.id)}>{t.label}</button>)}
           {st.tool === "draw" && <><span className="sep" /><span className="lbl">Leads with</span><button className={!st.drawReverse ? "active" : ""} onClick={() => st.setDrawReverse(false)}>Front</button><button className={st.drawReverse ? "active" : ""} onClick={() => st.setDrawReverse(true)}>Back</button></>}
         </div>
         <details className="view"><summary>View</summary><div>{(Object.keys(OVERLAY_LABELS) as (keyof Overlays)[]).map((k) => <label key={k}><input type="checkbox" checked={st.overlays[k]} onChange={(e) => st.setOverlay(k, e.target.checked)} /> {OVERLAY_LABELS[k]}</label>)}</div></details>

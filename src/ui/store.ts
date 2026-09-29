@@ -8,6 +8,8 @@ import { worldInit, type CustomField, type GameModule } from "../games/types";
 import { defaultPorts, type Ports, type TargetId } from "../codegen";
 import type { CodeFrame } from "../core/frame";
 import { optimizeTimeouts as optimizeTimeoutsCore } from "../core/tune";
+import { DEFAULT_AVOID, avoidList, repairRoutine, type AvoidSettings } from "../core/repair";
+import { toStraightLines } from "../core/simple";
 import { planRoutes, prepareTasks, type PlanCandidate, type PlanTask } from "../core/planner";
 
 export interface Overlays { plan: boolean; trail: boolean; odom: boolean; footprints: boolean; dots: boolean; zones: boolean; tape: boolean; pieces: boolean }
@@ -87,6 +89,11 @@ interface Store {
   stopPlan: () => void;
   applyPlan: (c: PlanCandidate) => void;
   scoreOf: (c: PlanCandidate) => string;
+  simple: boolean;
+  setSimple: (v: boolean) => void;
+  avoid: AvoidSettings;
+  setAvoid: (patch: Partial<AvoidSettings>) => void;
+  fixPath: (only?: string) => string;
   overlays: Overlays;
   setOverlay: (k: keyof Overlays, v: boolean) => void;
   optimizeTimeouts: () => void;
@@ -340,7 +347,7 @@ export const useStore = create<Store>((set, get) => {
       set({ planning: 0, plans: null, planNotes: prep.notes, planErrors: prep.errors });
       if (prep.errors.length) { set({ plans: [], planning: null }); return; }
       const plans = await planRoutes({
-        routine: base, tasks: prep.tasks, cfg: s.robot, game: g, world, obstacles: world.obstacles, seed: s.simOpts.seed,
+        routine: base, tasks: prep.tasks, cfg: s.robot, game: g, world, obstacles: world.obstacles, seed: s.simOpts.seed, simple: s.simple,
         onProgress: (p) => set({ planning: p }), shouldStop: () => stopFlag,
       });
       set({ plans, planning: null });
@@ -352,6 +359,28 @@ export const useStore = create<Store>((set, get) => {
       changed();
     },
     scoreOf: (c) => { const g = get().game(); const sc = g.score(c.recording.world); return get().routine.alliance === "red" ? String(sc.red) : String(sc.blue); },
+    simple: (() => { try { return localStorage.getItem("simtoendallsims:simple") === "1"; } catch { return false; } })(),
+    setSimple: (simple) => {
+      try { localStorage.setItem("simtoendallsims:simple", simple ? "1" : "0"); } catch { /* ignore */ }
+      if (simple) { pushHistory(); set((s) => ({ simple, routine: toStraightLines(s.routine, s.robot), tool: s.tool === "select" || s.tool === "targets" || s.tool === "draw" ? s.tool : "draw", selected: null })); changed(); }
+      else set({ simple });
+    },
+    avoid: DEFAULT_AVOID,
+    setAvoid: (patch) => set((s) => ({ avoid: { ...s.avoid, ...patch } })),
+    fixPath: (only) => {
+      const s = get();
+      const g = s.game();
+      const init = worldInit(g, s.routine.alliance);
+      const obst = s.customField ? s.customField.obstacles : g.obstacles;
+      const objs = s.customField ? s.customField.objects : g.objects;
+      const list = avoidList(obst, objs, s.avoid, s.routine, s.robot);
+      const { routine, changed: n } = repairRoutine(s.routine, s.robot, list, s.avoid, init.fieldSize, only);
+      if (!n) return "Nothing to fix: the path already keeps clear of everything ticked.";
+      pushHistory();
+      set({ routine: s.simple ? toStraightLines(routine, s.robot) : routine });
+      changed();
+      return `Re-routed ${n} step${n === 1 ? "" : "s"} around what you ticked. Undo (Ctrl+Z) if you don't like it.`;
+    },
     overlays: loadOverlays(),
     setOverlay: (k, v) => { const overlays = { ...get().overlays, [k]: v }; set({ overlays }); try { localStorage.setItem(OVERLAY_KEY, JSON.stringify(overlays)); } catch { /* ignore */ } },
     optimizeTimeouts: () => {

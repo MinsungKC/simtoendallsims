@@ -8,6 +8,8 @@ export interface TuneResult {
   horizontalDrift: number;
   /** cost of the winning settings (lower is better) and of the input settings, for the UI */
   score: { before: number; after: number };
+  /** True when the search found nothing better than the current gains on smooth-auton motions, so they were left alone */
+  kept?: boolean;
 }
 
 /** LemLib guidance: ~2 for an all-omni "drift" drive, ~8 for center traction wheels. */
@@ -65,11 +67,13 @@ const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v
  * overshoot and final error over several moves, and additionally at +/-25% kP so the result isn't knife-edge.
  * The result is a STARTING POINT: the real robot differs (battery, wear, floor, mass distribution).
  */
-export function autoTune(cfg: RobotConfig, onProgress?: (p: number) => void): TuneResult {
-  const base: RobotConfig = { ...cfg, horizontalDrift: suggestHorizontalDrift(cfg) };
+export function autoTune(cfg: RobotConfig, onProgress?: (p: number) => void, mode: "safe" | "fast" = "safe"): TuneResult {
+  // keep the user's horizontal drift: it shapes boomerang/pure-pursuit curves, and changing it silently reshapes smooth autons
+  const base: RobotConfig = { ...cfg };
+  const ovW = mode === "safe" ? 0.9 : 0.3; // how much overshoot past the target costs (safe: stay clear of things)
   const lat = (kP: number, kD: number) => {
     const c = { ...base, lateral: { ...base.lateral, kP, kD } };
-    return cost([lateralTrial(c, 12), lateralTrial(c, 24), lateralTrial(c, 48)], 0.3, 0.5);
+    return cost([lateralTrial(c, 12), lateralTrial(c, 24), lateralTrial(c, 48)], ovW, 0.5);
   };
   const ang = (kP: number, kD: number) => {
     const c = { ...base, angular: { ...base.angular, kP, kD } };
@@ -107,12 +111,38 @@ export function autoTune(cfg: RobotConfig, onProgress?: (p: number) => void): Tu
     return best;
   };
 
-  const bestLat = search(robustLat, [3, 5, 8, 12, 18, 28], [0, 10, 25, 45, 75, 120], { p: [2, 40], d: [0, 160] });
-  const bestAng = search(robustAng, [1, 1.6, 2.4, 3.6, 5, 7], [3, 6, 10, 18, 30, 50], { p: [0.5, 10], d: [1, 80] });
+  const bestLat = search(robustLat, mode === "safe" ? [3, 5, 8, 12, 16, 20] : [3, 5, 8, 12, 18, 28], mode === "safe" ? [0, 5, 12, 20, 35, 55] : [0, 10, 25, 45, 75, 110], mode === "safe" ? { p: [2, 20], d: [0, 60] } : { p: [2, 40], d: [0, 120] });
+  const bestAng = search(robustAng, mode === "safe" ? [1, 1.6, 2.4, 3.2, 4, 5] : [1, 1.6, 2.4, 3.6, 5, 7], mode === "safe" ? [3, 6, 10, 16, 24, 38] : [3, 6, 10, 18, 30, 50], mode === "safe" ? { p: [0.5, 5], d: [1, 40] } : { p: [0.5, 8], d: [1, 60] });
 
+  // Validate on the motions that make up smooth autons (boomerang poses, reverse, chained points): an overshoot here is a robot
+  // driving through a Goal. Keep the current gains if the new ones are not at least as tidy.
+  const suite = (lateral: ControllerGains, angular: ControllerGains) => {
+    const c = { ...base, lateral, angular };
+    let t = 0;
+    for (const m of [
+      { ...defaultMotion("moveToPose", { x: 30, y: 30, heading: 90 }), timeout: 5000 },
+      { ...defaultMotion("moveToPose", { x: 10, y: 40, heading: 0 }), timeout: 5000 },
+      { ...defaultMotion("moveToPose", { x: 20, y: -30, heading: 45 }), forwards: false, timeout: 5000 },
+      { ...defaultMotion("moveToPoint", { x: 0, y: 40, heading: 0 }), minSpeed: 45, earlyExit: 6, timeout: 4000 },
+    ]) {
+      const rec = runSingleMotion(c, m as never);
+      const f = rec.frames[rec.frames.length - 1];
+      const target = "x" in m ? { x: (m as { x: number }).x, y: (m as { y: number }).y } : { x: 0, y: 0 };
+      let over = 0;
+      const endErr = Math.hypot(f.x - target.x, f.y - target.y);
+      // farthest the path strays past the target along the travel direction
+      const dir = Math.hypot(target.x, target.y) || 1;
+      for (const fr of rec.frames) over = Math.max(over, (fr.x * target.x + fr.y * target.y) / dir - dir);
+      t += rec.duration + 1.5 * endErr + ovW * Math.max(0, over) + (rec.steps[0].timedOut ? 3 : 0);
+    }
+    return t;
+  };
+  const candLat = { ...base.lateral, kP: r2(bestLat.kP), kD: r2(bestLat.kD) }, candAng = { ...base.angular, kP: r2(bestAng.kP), kD: r2(bestAng.kD) };
+  const keep = suite(candLat, candAng) > suite(base.lateral, base.angular) * 1.02;
+  if (keep) return { lateral: base.lateral, angular: base.angular, horizontalDrift: base.horizontalDrift, score: { before: before.lat + before.ang, after: before.lat + before.ang }, kept: true };
   return {
-    lateral: { ...base.lateral, kP: r2(bestLat.kP), kD: r2(bestLat.kD) },
-    angular: { ...base.angular, kP: r2(bestAng.kP), kD: r2(bestAng.kD) },
+    lateral: candLat,
+    angular: candAng,
     horizontalDrift: base.horizontalDrift,
     score: { before: before.lat + before.ang, after: bestLat.c + bestAng.c },
   };

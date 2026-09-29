@@ -53,3 +53,16 @@ describe("planning end to end", () => {
     expect(top.length, JSON.stringify(res.slice(0, 4).map((r) => r.problems))).toBeGreaterThan(0);
   }, 120000);
 });
+
+describe("waypoints and simple mode", () => {
+  it("plans through a waypoint with its own speed/actions, using straight legs only in simple mode", async () => {
+    const wp: PlanTask = { id: "w", label: "Point 1", x: -50, y: 10, targetKind: "point", action: "none", side: "auto", approach: 90, speed: 80, extra: [{ type: "clamp", when: "end" }] };
+    const prep = prepareTasks({ ...args, tasks: [wp, goal("red-W", -48, -24)] });
+    expect(prep.errors).toEqual([]);
+    const res = await planRoutes({ routine, tasks: prep.tasks, cfg, game: override, world, obstacles: override.obstacles, simple: true });
+    expect(res.length).toBeGreaterThan(0);
+    for (const c of res) for (const s of c.routine.steps) expect(["moveToPoint", "turnToHeading"]).toContain(s.motion.type);
+    const first = res[0].routine.steps.find((s) => s.actions.some((a) => a.type === "clamp"));
+    expect(first).toBeDefined();
+  }, 60000);
+});

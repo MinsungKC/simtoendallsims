@@ -4,6 +4,7 @@ import { describeMotion } from "../codegen/common";
 import { pathLength } from "../core/path";
 import { Check, Num, Sel, Section } from "./atoms";
 import { PlanPanel } from "./PlanPanel";
+import { useState } from "react";
 import { bearingDeg, fmt } from "./helpers";
 import { useEditor, type Tool } from "./store";
 
@@ -32,6 +33,7 @@ export function RoutinePanel() {
   const { routine, robot, selected, select } = st;
   const game = st.game();
   const planned = planPoses(routine, robot);
+  const [fixMsg, setFixMsg] = useState<string | null>(null);
   const step = routine.steps.find((s) => s.id === selected) ?? null;
   const idx = step ? routine.steps.indexOf(step) : -1;
 
@@ -59,6 +61,20 @@ export function RoutinePanel() {
       </Section>
 
       <PlanPanel />
+
+      <Section title="Avoid & fix path">
+        <p className="note">Tick what the robot must not hit, then fix the route. Curves are pushed away and refit; straight legs get bends added. Targets you drive to are never moved.</p>
+        <Check label="Goals" value={st.avoid.goals} onChange={(goals) => st.setAvoid({ goals })} />
+        <Check label="Loaders" value={st.avoid.loaders} onChange={(loaders) => st.setAvoid({ loaders })} />
+        <Check label="Walls" value={st.avoid.walls} onChange={(walls) => st.setAvoid({ walls })} />
+        <Check label="Game pieces (except ones you pick up)" value={st.avoid.pieces} onChange={(pieces) => st.setAvoid({ pieces })} />
+        <Num label="Extra margin" value={st.avoid.margin} onChange={(margin) => st.setAvoid({ margin })} unit="in" min={0} step={0.5} hint="Clearance beyond the robot's half-width" />
+        <div className="btns">
+          <button className="primary" onClick={() => setFixMsg(st.fixPath())}>Fix whole route</button>
+          {step && <button onClick={() => setFixMsg(st.fixPath(step.id))}>Fix selected step</button>}
+        </div>
+        {fixMsg && <p className="note">{fixMsg}</p>}
+      </Section>
 
       <Section title={`Steps (${routine.steps.length})`} right={
         <span className="btns inline"><button onClick={st.optimizeTimeouts} title="Set every step's timeout from how long it really takes in the simulation">Auto timeouts</button><select value="" onChange={(e) => { if (e.target.value) addByType(e.target.value as MotionSpec["type"]); }}>
@@ -96,7 +112,7 @@ export function RoutinePanel() {
           <ActionsEditor step={step} />
         </Section>
       )}
-      <Section title="More: routines, exact start, name" open={false}>
+      {!st.simple && <Section title="More: routines, exact start, name" open={false}>
         <div className="row">
           <select className="wide" value={st.active} onChange={(e) => st.switchRoutine(parseInt(e.target.value, 10))} title="Routines in this project">
             {st.allRoutines().map((r, i) => <option key={i} value={i}>{r.name || `Auton ${i + 1}`} ({r.alliance})</option>)}
@@ -112,7 +128,7 @@ export function RoutinePanel() {
         <Num label="Start X" value={routine.start.x} onChange={(x) => st.setRoutine({ start: { ...routine.start, x } })} step={0.5} unit="in" />
         <Num label="Start Y" value={routine.start.y} onChange={(y) => st.setRoutine({ start: { ...routine.start, y } })} step={0.5} unit="in" />
         <Num label="Start heading" value={routine.start.heading} onChange={(heading) => st.setRoutine({ start: { ...routine.start, heading } })} step={1} unit="°" />
-      </Section>
+      </Section>}
     </div>
   );
 }
