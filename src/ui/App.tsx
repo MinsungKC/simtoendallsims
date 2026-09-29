@@ -115,7 +115,7 @@ export function App() {
           <>
             <p>x {tel.x.toFixed(1)} in · y {tel.y.toFixed(1)} in</p>
             <p>heading {(((tel.heading % 360) + 360) % 360).toFixed(1)}°</p>
-            <p>v {tel.v.toFixed(1)} in/s · ω {tel.w.toFixed(0)} °/s</p>
+            <p>v {tel.vx.toFixed(1)} in/s · ω {tel.w.toFixed(0)} °/s</p>
             <p>battery {tel.batteryV.toFixed(2)} V</p>
             <p>t {tel.t.toFixed(2)} s</p>
           </>
