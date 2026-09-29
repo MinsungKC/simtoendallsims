@@ -2,7 +2,10 @@ import { useMemo, useState } from "react";
 import { generate, TARGETS, type GenResult } from "../codegen";
 import { Badge, Check, IntList, Num, Sel, Section } from "./atoms";
 import { download, makeZip } from "./helpers";
-import { useEditor } from "./store";
+import { ident } from "../codegen/common";
+import { simulate } from "../core/runtime";
+import { worldInit } from "../games/types";
+import { useEditor, useStore } from "./store";
 
 const VERIFY: Record<string, string> = {
   lemlib: "Compile-checked in tests against PROS 4.2.2 + LemLib (stable) headers.",
@@ -12,7 +15,7 @@ const VERIFY: Record<string, string> = {
 };
 
 export function CodePanel() {
-  const { routine, robot, ports, target, setTarget, setPorts, recording } = useEditor();
+  const { routine, robot, ports, target, setTarget, setPorts, recording, routines } = useEditor();
   const [fileIdx, setFileIdx] = useState(0);
   const [copied, setCopied] = useState(false);
 
@@ -78,6 +81,26 @@ export function CodePanel() {
               <button onClick={() => download(`${routine.name.replace(/\W+/g, "_") || "auton"}_${result.target}.zip`, makeZip(result.files).buffer as ArrayBuffer, "application/zip")}>Download .zip</button>
             </span>
           }>
+            {routines.length > 1 && (
+              <div className="btns" style={{ marginBottom: 6 }}>
+                <button onClick={() => {
+                  const st = useStore.getState();
+                  const g = st.game();
+                  const init = st.customField ? { ...worldInit(g), objects: st.customField.objects, obstacles: st.customField.obstacles } : worldInit(g);
+                  const used = new Set<string>();
+                  const files: { path: string; content: string }[] = [];
+                  for (const r of st.allRoutines()) {
+                    let name = ident(r.name) || "auton"; let n = 2; const base = name;
+                    while (used.has(name)) name = `${base}_${n++}`;
+                    used.add(name);
+                    const rec = simulate(r, robot, init, { seed: st.simOpts.seed });
+                    const res = generate(target, { routine: r, cfg: robot, ports, recording: rec, fnName: name });
+                    for (const f of res.files) files.push({ path: `${name}/${f.path}`, content: f.content });
+                  }
+                  download(`${ident(st.routine.name) || "project"}_all_${target}.zip`, makeZip(files).buffer as ArrayBuffer, "application/zip");
+                }}>Download all {routines.length} routines (.zip)</button>
+              </div>
+            )}
             <div className="file-tabs">
               {result.files.map((f, i) => <button key={f.path} className={i === Math.min(fileIdx, result.files.length - 1) ? "active" : ""} onClick={() => setFileIdx(i)}>{f.path}</button>)}
             </div>

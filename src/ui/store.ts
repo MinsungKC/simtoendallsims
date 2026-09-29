@@ -21,6 +21,9 @@ interface Store {
   robot: RobotConfig;
   ports: Ports;
   routine: Routine;
+  /** Snapshots of every routine in the project; the entry at `active` is stale until synced (see allRoutines) */
+  routines: Routine[];
+  active: number;
   gameId: string;
   customField: CustomField | null;
   target: TargetId;
@@ -68,6 +71,11 @@ interface Store {
   removeAction: (stepId: string, actionId: string) => void;
   mirror: () => void;
   clearRoutine: () => void;
+  allRoutines: () => Routine[];
+  switchRoutine: (i: number) => void;
+  newRoutine: () => void;
+  duplicateRoutine: () => void;
+  deleteRoutine: () => void;
   loadProject: (p: ProjectFile) => void;
 
   runSim: () => void;
@@ -82,6 +90,9 @@ export interface ProjectFile {
   robot: RobotConfig;
   ports: Ports;
   routine: Routine;
+  /** Optional: all routines in the project (older files only have `routine`) */
+  routines?: Routine[];
+  active?: number;
   gameId: string;
   customField: CustomField | null;
   target: TargetId;
@@ -90,12 +101,15 @@ export interface ProjectFile {
 
 const KEY = "simtoendallsims:project:v1";
 
-function initial(): Pick<Store, "robot" | "ports" | "routine" | "gameId" | "customField" | "target" | "simOpts"> {
+function initial(): Pick<Store, "robot" | "ports" | "routine" | "routines" | "active" | "gameId" | "customField" | "target" | "simOpts"> {
   const robot = defaultRobot();
+  const demo = demoRoutine();
   const base = {
     robot,
     ports: defaultPorts(robot),
-    routine: demoRoutine(),
+    routine: demo,
+    routines: [demo],
+    active: 0,
     gameId: "high-stakes",
     customField: null as CustomField | null,
     target: "lemlib" as TargetId,
@@ -107,10 +121,14 @@ function initial(): Pick<Store, "robot" | "ports" | "routine" | "gameId" | "cust
       const p = JSON.parse(raw) as Partial<ProjectFile>;
       if (p.app === "simtoendallsims" && p.robot && p.routine) {
         const r = { ...defaultRobot(), ...p.robot, odom: { ...defaultRobot().odom, ...p.robot.odom } };
+        const list = p.routines && p.routines.length ? p.routines : [p.routine];
+        const active = Math.min(Math.max(0, p.active ?? 0), list.length - 1);
         return {
           robot: r,
           ports: { ...defaultPorts(r), ...(p.ports ?? {}) },
-          routine: p.routine,
+          routine: list[active],
+          routines: list,
+          active,
           gameId: p.gameId ?? base.gameId,
           customField: p.customField ?? null,
           target: p.target ?? base.target,
@@ -140,9 +158,11 @@ export function demoRoutine(): Routine {
   };
 }
 
+const syncedRoutines = (s: Pick<Store, "routines" | "routine" | "active">): Routine[] => s.routines.map((r, i) => (i === s.active ? s.routine : r));
+
 const persist = (s: Store): void => {
   try {
-    const p: ProjectFile = { app: "simtoendallsims", version: 1, robot: s.robot, ports: s.ports, routine: s.routine, gameId: s.gameId, customField: s.customField, target: s.target, simOpts: s.simOpts };
+    const p: ProjectFile = { app: "simtoendallsims", version: 1, robot: s.robot, ports: s.ports, routine: s.routine, routines: syncedRoutines(s), active: s.active, gameId: s.gameId, customField: s.customField, target: s.target, simOpts: s.simOpts };
     localStorage.setItem(KEY, JSON.stringify(p));
   } catch {
     /* ignore */
@@ -275,6 +295,40 @@ export const useStore = create<Store>((set, get) => {
     addAction: (stepId, action) => editStep(stepId, (st) => ({ ...st, actions: [...st.actions, action] })),
     updateAction: (stepId, actionId, patch) => editStep(stepId, (st) => ({ ...st, actions: st.actions.map((a) => (a.id === actionId ? ({ ...a, ...patch } as ActionSpec) : a)) })),
     removeAction: (stepId, actionId) => editStep(stepId, (st) => ({ ...st, actions: st.actions.filter((a) => a.id !== actionId) })),
+    allRoutines: () => syncedRoutines(get()),
+    switchRoutine: (i) => {
+      const s = get();
+      if (i === s.active || i < 0 || i >= s.routines.length) return;
+      const list = syncedRoutines(s);
+      set({ routines: list, active: i, routine: list[i], selected: null, time: 0, playing: false });
+      changed();
+    },
+    newRoutine: () => {
+      const s = get();
+      const list = syncedRoutines(s);
+      const g = s.game();
+      const first = g.starts[0];
+      const r: Routine = { ...emptyRoutine(s.gameId), name: `Auton ${list.length + 1}`, start: first ? { x: first.x, y: first.y, heading: first.heading } : emptyRoutine().start };
+      set({ routines: [...list, r], active: list.length, routine: r, selected: null, time: 0, playing: false });
+      changed();
+    },
+    duplicateRoutine: () => {
+      const s = get();
+      const list = syncedRoutines(s);
+      const copy: Routine = { ...JSON.parse(JSON.stringify(s.routine)), name: `${s.routine.name} copy` };
+      copy.steps = copy.steps.map((st: Step) => ({ ...st, id: uid(), actions: st.actions.map((a) => ({ ...a, id: uid() })) }));
+      set({ routines: [...list, copy], active: list.length, routine: copy, selected: null, time: 0, playing: false });
+      changed();
+    },
+    deleteRoutine: () => {
+      const s = get();
+      const list = syncedRoutines(s);
+      if (list.length <= 1) return;
+      const next = list.filter((_, i) => i !== s.active);
+      const active = Math.min(s.active, next.length - 1);
+      set({ routines: next, active, routine: next[active], selected: null, time: 0, playing: false });
+      changed();
+    },
     mirror: () => {
       pushHistory();
       set((s) => ({ routine: mirrorRoutine(s.routine) }));
@@ -287,7 +341,9 @@ export const useStore = create<Store>((set, get) => {
     },
     loadProject: (p) => {
       pushHistory();
-      set({ robot: { ...defaultRobot(), ...p.robot, odom: { ...defaultRobot().odom, ...p.robot.odom } }, ports: p.ports, routine: p.routine, gameId: p.gameId, customField: p.customField ?? null, target: p.target ?? "lemlib", simOpts: p.simOpts ?? get().simOpts, selected: null });
+      const list = p.routines && p.routines.length ? p.routines : [p.routine];
+      const active = Math.min(Math.max(0, p.active ?? 0), list.length - 1);
+      set({ robot: { ...defaultRobot(), ...p.robot, odom: { ...defaultRobot().odom, ...p.robot.odom } }, ports: p.ports, routine: list[active], routines: list, active, gameId: p.gameId, customField: p.customField ?? null, target: p.target ?? "lemlib", simOpts: p.simOpts ?? get().simOpts, selected: null });
       changed();
     },
 

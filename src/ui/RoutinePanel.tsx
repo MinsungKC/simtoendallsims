@@ -41,6 +41,16 @@ export function RoutinePanel() {
   return (
     <div className="panel-body">
       <Section title="Routine">
+        <div className="row">
+          <select className="wide" value={st.active} onChange={(e) => st.switchRoutine(parseInt(e.target.value, 10))} title="Routines in this project">
+            {st.allRoutines().map((r, i) => <option key={i} value={i}>{r.name || `Auton ${i + 1}`} ({r.alliance})</option>)}
+          </select>
+        </div>
+        <div className="btns" style={{ marginTop: 0, marginBottom: 6 }}>
+          <button onClick={st.newRoutine}>+ New</button>
+          <button onClick={st.duplicateRoutine}>Duplicate</button>
+          <button onClick={st.deleteRoutine} disabled={st.routines.length <= 1}>Delete</button>
+        </div>
         <label className="row"><span>Name</span><input value={routine.name} onChange={(e) => st.setRoutine({ name: e.target.value }, { history: false })} /></label>
         <Sel label="Alliance" value={routine.alliance} options={[{ value: "red", label: "Red" }, { value: "blue", label: "Blue" }]} onChange={(v) => st.setRoutine({ alliance: v })} />
         <label className="row">

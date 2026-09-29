@@ -172,12 +172,13 @@ export const pushBack: GameModule = {
 
 nextId = 1;
 const overrideObjects: Obj[] = [];
-for (let i = 0; i < 63; i++) {
-  const col = i % 9, row = Math.floor(i / 9);
-  const team: Team = i < 24 ? "red" : i < 48 ? "blue" : "neutral";
-  overrideObjects.push(obj(i >= 56 ? "pin-yellow" : "pin", team, -56 + col * 14, -42 + row * 12, 1.6, 0.05));
+// 24 red + 24 blue pins in three rows each, 15 neutral (7 yellow) along the side walls; 56 cups along the far wall
+for (let i = 0; i < 24; i++) {
+  overrideObjects.push(obj("pin", "red", -49 + (i % 8) * 14, 32 + Math.floor(i / 8) * 6, 1.6, 0.05));
+  overrideObjects.push(obj("pin", "blue", -49 + (i % 8) * 14, -32 - Math.floor(i / 8) * 6, 1.6, 0.05));
 }
-for (let i = 0; i < 56; i++) overrideObjects.push(obj("cup", "neutral", -60 + (i % 14) * 9, 60 - Math.floor(i / 14) * 5, 2, 0.04));
+for (let i = 0; i < 15; i++) overrideObjects.push(obj(i < 8 ? "pin" : "pin-yellow", "neutral", i < 8 ? -62 : 62, -28 + (i % 8) * 8, 1.6, 0.05));
+for (let i = 0; i < 56; i++) overrideObjects.push(obj("cup", "neutral", -58 + (i % 14) * 8.9, 52 + Math.floor(i / 14) * 4, 2, 0.04));
 const overrideZones: ScoringZone[] = [
   { id: "tall", label: "Tall Goal", geom: { shape: "circle", x: 0, y: 0, r: 8 }, accepts: ["pin", "pin-yellow"], points: 5, color: "#e2b93b" },
   ...[[-24, 24], [24, 24], [-24, -24], [24, -24]].map(([x, y], i) => ({ id: `short-${i}`, label: `Short Goal ${i + 1}`, geom: { shape: "circle" as const, x, y, r: 6 }, accepts: ["pin", "pin-yellow"], points: 5, color: "#e2b93b" })),

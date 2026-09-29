@@ -29,6 +29,13 @@ describe("game modules", () => {
       }
     }
   });
+  it("nothing starts inside a scoring zone (score is 0 at the whistle)", () => {
+    for (const g of games) {
+      const w = createWorld(worldInit(g), { x: 0, y: 0, heading: 0 });
+      const sc = g.score(w);
+      expect({ game: g.id, red: sc.red, blue: sc.blue }).toEqual({ game: g.id, red: 0, blue: 0 });
+    }
+  });
   it("starts fit the 18in cube", () => {
     for (const g of games) expect(g.startingSize === null || g.startingSize.value >= 18).toBe(true);
   });

@@ -205,3 +205,14 @@ describe("tuning", () => {
     expect(res.score.after).toBeLessThanOrEqual(res.score.before + 1e-9);
   }, 60000);
 });
+
+describe("reverse motions", () => {
+  it("follow with forwards=false drives the path backwards", () => {
+    const motion = m("follow", { x: 0, y: 0, heading: 0 }, { forwards: false });
+    if (motion.type === "follow") motion.path.segments = [{ p: [{ x: 0, y: 0 }, { x: 0, y: -8 }, { x: 8, y: -16 }, { x: 16, y: -24 }] }];
+    const r = runSingleMotion(cfg, motion);
+    const f = r.frames[r.frames.length - 1];
+    expect(Math.hypot(f.x - 16, f.y + 24)).toBeLessThan(6);
+    expect(r.warnings.filter((w) => w.text.includes("timeout"))).toHaveLength(0);
+  });
+});

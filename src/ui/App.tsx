@@ -8,6 +8,8 @@ import { Timeline } from "./Timeline";
 import { Badge } from "./atoms";
 import { download, scoreFor } from "./helpers";
 import { games } from "../games";
+import { preflight } from "../core/preflight";
+import { useMemo } from "react";
 import { useEditor, useStore, type ProjectFile, type Tab } from "./store";
 
 const TABS: { id: Tab; label: string }[] = [
@@ -65,12 +67,21 @@ export function App() {
   }, []);
 
   const score = recording ? scoreFor(game, st.customField, recording.world) : null;
-  const warnings = recording?.warnings ?? [];
+  const pre = useMemo(() => {
+    const objs = st.customField ? st.customField.objects : game.objects;
+    const obst = st.customField ? st.customField.obstacles : game.obstacles;
+    return preflight(routine, robot, game, obst, objs);
+  }, [routine, robot, game, st.customField]);
+  const warnings = [
+    ...pre.map((p) => ({ t: 0, step: p.step ?? -1, text: p.text, level: p.level })),
+    ...(recording?.warnings ?? []).map((w) => ({ ...w, level: "warn" as const })),
+  ];
+  const errors = warnings.filter((w) => w.level === "error").length;
   const autonLimit = game.autonSeconds.value;
   const over = recording && recording.duration > autonLimit;
 
   const save = () => {
-    const p: ProjectFile = { app: "simtoendallsims", version: 1, robot, ports: st.ports, routine, gameId: st.gameId, customField: st.customField, target: st.target, simOpts: st.simOpts };
+    const p: ProjectFile = { app: "simtoendallsims", version: 1, robot, ports: st.ports, routine, routines: st.allRoutines(), active: st.active, gameId: st.gameId, customField: st.customField, target: st.target, simOpts: st.simOpts };
     download(`${routine.name.replace(/\W+/g, "_") || "auton"}.simproject.json`, JSON.stringify(p, null, 1), "application/json");
   };
   const load = async (file: File) => {
@@ -96,7 +107,7 @@ export function App() {
           <>
             <Badge kind={over ? "bad" : "ok"}>{recording.duration.toFixed(1)} s / {autonLimit} s</Badge>
             {score && <Badge kind="info">score R {score.red} · B {score.blue}</Badge>}
-            <Badge kind={warnings.length ? "warn" : "ok"}>{warnings.length} warning{warnings.length === 1 ? "" : "s"}</Badge>
+            <Badge kind={errors ? "bad" : warnings.length ? "warn" : "ok"}>{errors ? `${errors} error${errors === 1 ? "" : "s"} · ` : ""}{warnings.length - errors} warning{warnings.length - errors === 1 ? "" : "s"}</Badge>
           </>
         )}
         <button onClick={() => { const cur = document.documentElement.dataset.theme; const dark = cur ? cur === "dark" : matchMedia("(prefers-color-scheme: dark)").matches; const next = dark ? "light" : "dark"; document.documentElement.dataset.theme = next; try { localStorage.setItem("simtoendallsims:theme", next); } catch { /* ignore */ } }} title="Toggle light/dark">◐</button>
@@ -127,7 +138,7 @@ export function App() {
         </div>
         {warnings.length > 0 && (
           <ul className="warnings">
-            {warnings.slice(0, 6).map((w, i) => <li key={i} onClick={() => w.step >= 0 && routine.steps[w.step] && st.select(routine.steps[w.step].id)}>⚠ {w.step >= 0 ? `Step ${w.step + 1}: ` : ""}{w.text}</li>)}
+            {warnings.slice(0, 6).map((w, i) => <li key={i} className={w.level === "error" ? "bad" : ""} onClick={() => w.step >= 0 && routine.steps[w.step] && st.select(routine.steps[w.step].id)}>{w.level === "error" ? "✖" : "⚠"} {w.step >= 0 ? `Step ${w.step + 1}: ` : ""}{w.text}</li>)}
             {warnings.length > 6 && <li>… and {warnings.length - 6} more</li>}
           </ul>
         )}
