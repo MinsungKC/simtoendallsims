@@ -8,4 +8,5 @@ clone() { [ -d "$2" ] || git clone -q --depth 1 ${3:+--branch "$3"} "$1" "$2"; }
 clone https://github.com/purduesigbots/pros pros 4.2.2
 clone https://github.com/LemLib/LemLib LemLib stable
 clone https://github.com/EZ-Robotics/EZ-Template EZ-Template
+clone https://github.com/JacksonAreaRobotics/JAR-Template JAR-Template
 echo "refs ready in .refs/"

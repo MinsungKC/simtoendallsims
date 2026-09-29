@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import type { GenFile } from "./types";
 
 export const REFS = resolve(process.cwd(), ".refs");
-export const haveRefs = existsSync(join(REFS, "pros/include")) && existsSync(join(REFS, "LemLib/include")) && existsSync(join(REFS, "EZ-Template/EZ-Template-Example-Project/include"));
+export const haveRefs = existsSync(join(REFS, "pros/include")) && existsSync(join(REFS, "LemLib/include")) && existsSync(join(REFS, "JAR-Template/include")) && existsSync(join(REFS, "EZ-Template/EZ-Template-Example-Project/include"));
 
 /** `overlay`: an existing project whose include/ folder is copied first, so generated files replace its own. */
 export function compileCheck(files: GenFile[], includeDirs: string[], sources: string[], overlay?: string): { ok: boolean; log: string } {
