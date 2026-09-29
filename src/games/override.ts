@@ -87,10 +87,10 @@ type Obj = GameModule["objects"][number];
 let nextId = 1;
 const objects: Obj[] = [];
 const add = (o: Omit<Obj, "id">): Obj => { const full = { id: nextId++, ...o } as Obj; objects.push(full); return full; };
-const cup = (x: number, y: number, opaqueUp: boolean): Obj => add({ kind: "cup", team: "neutral", x, y, r: CUP.r, mass: CUP.mass, drag: 30, opaqueUp });
+const cup = (x: number, y: number, opaqueUp: boolean): Obj => add({ kind: "cup", team: "neutral", x, y, r: CUP.r, mass: CUP.mass, drag: 30, opaqueUp, tip: { height: CUP.height, baseR: CUP.r, half: (CUP.height - 2 * CUP.r) / 2, lyingR: CUP.r } });
 /** A Pin standing upright: `halves` are [lower, upper]; `flip` swaps which half is up. */
 const standingPin = (x: number, y: number, a: string, b: string, extra: Partial<Obj> = {}): Obj =>
-  add({ kind: "pin", team: a === "yellow" && b === "yellow" ? "neutral" : a === "yellow" ? (b as "red" | "blue") : (a as "red" | "blue"), x, y, r: PIN.r, mass: PIN.mass, drag: 30, halves: [a, b], flip: false, ...extra });
+  add({ kind: "pin", team: a === "yellow" && b === "yellow" ? "neutral" : a === "yellow" ? (b as "red" | "blue") : (a as "red" | "blue"), x, y, r: PIN.r, mass: PIN.mass, drag: 30, halves: [a, b], flip: false, tip: { height: PIN.length, baseR: 0.65, half: PIN.half, lyingR: PIN.r }, ...extra });
 /** A Pin lying on the floor pointing `angle` degrees (0 = +y, clockwise) with its halves[1] end farthest out. */
 const lyingPin = (x: number, y: number, a: string, b: string, angle: number): Obj =>
   standingPin(x, y, a, b, { lying: true, half: PIN.half, angle });
@@ -257,8 +257,8 @@ export function overrideChecks({ routine, cfg, recording, world }: { routine: im
     if (!hitOpposingObject && !crossed) {
       // objects lying on the opposing side (not on the line) that the robot's footprint reaches
       for (let i = 0; i < world.objects.length; i++) {
-        const ox = f.objs[i * 3], oy = f.objs[i * 3 + 1], st = f.objs[i * 3 + 2];
-        if (st !== 0) continue;
+        const ox = f.objs[i * 4], oy = f.objs[i * 4 + 1], st = f.objs[i * 4 + 2];
+        if (st !== 0 && st !== 6) continue;
         if (sideOfLine(ox, oy) === (mine === "red" ? "blue" : "red") && Math.abs(ox + oy) > 6 && pointInConvex(poly, ox, oy)) { hitOpposingObject = true; out.push({ level: "warn", text: `Robot contacts an object on the opposing side of the Autonomous Line at ${f.t.toFixed(1)} s (SG7)`, step: f.step }); break; }
       }
     }

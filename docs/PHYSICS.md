@@ -67,9 +67,18 @@ sim as "what a LemLib-class controller would do", not a bit-exact EZ-Template/JA
   reach it, then adjust "Floor grip" and "Drive efficiency" (Robot tab -> Calibration).
 
 ## Field objects
-Loose objects are point masses with sliding drag. A Pin lying on the floor is a **capsule** (a spine of half-length 2.2" swept by a
-1.0" radius) so robots, walls, Goals and other objects touch its 6.5" body, not just its center; standing Pins and Cups are circles.
-Pins standing in a Cup ride with it and are picked up with it.
+Loose objects are rigid bodies. Upright Pins and Cups are circles that **tip over** when knocked at more than the speed that lifts their
+center of gravity over the base edge (computed from height and base radius with a 2.5" bumper contact height: about 13 in/s for a Pin,
+35 in/s for a Cup); a tipped Cup throws out the Pin standing in it. A tipped/lying object is a **capsule** (Pin: 4.4" spine, 1.0" radius;
+Cup: 3.35" spine, 1.575" radius) with an angle, angular velocity and inertia: contacts with the robot, walls, Goals and other objects
+apply impulses at the contact point, so off-center hits spin it. Ground friction is anisotropic: it slides along its axis (30 in/s²)
+but **rolls** across it (4 in/s²), and yaw spin decays. Not modelled: the taper's curved rolling path, stacking on top of each other
+on the floor, and rocking/settling.
+
+## Chassis shape
+`RobotConfig.cutouts` are rectangular notches in the frame (goal aligners, pin slots, corner reliefs). The outline is decomposed into
+convex boxes and every contact test (walls, Goals, objects) runs on each box, so a notched robot really can straddle a Goal. Mass,
+inertia and the intake zone still come from the plain length x width box.
 
 ## Things I could not verify from here
 Real V5 stall current, 5.5 W motor curve, tire friction on your tiles, battery internal resistance, and the Override manual's

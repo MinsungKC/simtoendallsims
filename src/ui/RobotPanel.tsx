@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motorBudget } from "../core/motors";
-import { WHEEL_CATALOG, derive, type RobotConfig, type WheelType } from "../core/robot";
+import { WHEEL_CATALOG, chassisRects, derive, type RobotConfig, type WheelType } from "../core/robot";
 import { autoTune, suggestHorizontalDrift } from "../core/tune";
 import { Badge, Check, Num, Sel, Section } from "./atoms";
 import { PRESETS } from "./presets";
@@ -87,6 +87,29 @@ export function RobotPanel() {
         <Sel label="Brake mode" value={robot.brake} options={[{ value: "coast", label: "coast" }, { value: "brake", label: "brake" }, { value: "hold", label: "hold" }]} onChange={set("brake")} />
         <p className="note">Yaw inertia {d.inertia.toFixed(4)} kg·m² (uniform box). Free speed {d.freeSpeed.toFixed(0)} in/s; loaded top speed is ~10% lower.</p>
         {game.startingSize && (robot.length > game.startingSize.value || robot.width > game.startingSize.value) && <p className="bad">Exceeds the {game.startingSize.value}" starting size{game.startingSize.verified ? "" : " (UNVERIFIED)"}.</p>}
+      </Section>
+
+      <Section title="Chassis cutouts" open={!!robot.cutouts?.length}>
+        <p className="note">Notches cut out of the frame - a goal aligner slot, a pin channel, a corner relief. They change collisions: the notched robot can straddle a Goal or hold a Pin in the slot. Measured from the robot's center: <b>x</b> to the right, <b>y</b> forward.</p>
+        {(robot.cutouts ?? []).map((c, i) => {
+          const upd = (patch: Partial<typeof c>) => setRobot({ cutouts: robot.cutouts!.map((q, j) => (j === i ? { ...q, ...patch } : q)) });
+          return (
+            <div className="card" key={i}>
+              <b>Cutout {i + 1}</b>
+              <Num label="Center x" value={c.x} onChange={(v) => upd({ x: v })} step={0.25} unit="in" />
+              <Num label="Center y" value={c.y} onChange={(v) => upd({ y: v })} step={0.25} unit="in" />
+              <Num label="Width" value={c.w} onChange={(v) => upd({ w: v })} step={0.25} min={0.25} unit="in" />
+              <Num label="Depth" value={c.h} onChange={(v) => upd({ h: v })} step={0.25} min={0.25} unit="in" />
+              <button onClick={() => setRobot({ cutouts: robot.cutouts!.filter((_, j) => j !== i) })}>Remove</button>
+            </div>
+          );
+        })}
+        <div className="btns">
+          <button onClick={() => setRobot({ cutouts: [...(robot.cutouts ?? []), { x: 0, y: robot.length / 2 - 1, w: 6.2, h: 2 }] })} title="A 6.2 in wide, 2 in deep slot centered on the front edge: a Goal (5.6 in) nests into it">+ Front goal aligner</button>
+          <button onClick={() => setRobot({ cutouts: [...(robot.cutouts ?? []), { x: robot.width / 2 - 1, y: robot.length / 2 - 1, w: 2, h: 2 }, { x: -robot.width / 2 + 1, y: robot.length / 2 - 1, w: 2, h: 2 }] })}>+ Front corner reliefs</button>
+          <button onClick={() => setRobot({ cutouts: [...(robot.cutouts ?? []), { x: 0, y: 0, w: 2, h: 4 }] })}>+ Custom</button>
+        </div>
+        <p className="note">Frame area {chassisRects(robot).reduce((a, r) => a + r.w * r.h, 0).toFixed(0)} in² of {(robot.length * robot.width).toFixed(0)} in². Collision uses the notched outline; mass and inertia still come from the full box.</p>
       </Section>
 
       <Section title="Calibration" open={false}>

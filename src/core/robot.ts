@@ -66,6 +66,8 @@ export interface RobotConfig {
   trackWidth: number; // in, center-to-center of the left/right wheels
   length: number; // in
   width: number; // in
+  /** Rectangular notches cut out of the chassis outline (goal aligners, pin slots, ...). Empty/undefined = a plain box. */
+  cutouts?: Cutout[];
   mass: number; // kg
   /** Moment of inertia about the vertical axis, kg·m². null = derive from a uniform box */
   inertia: number | null;
@@ -87,6 +89,59 @@ export interface RobotConfig {
   intake: IntakeSpec | null;
   /** Tallest stack (pieces) the scoring mechanism can add to. Undefined = unlimited. */
   maxStack?: number;
+}
+
+/** A rectangular notch in the chassis, robot frame: x = right of center, y = ahead of center, w across, h along. */
+export interface Cutout { x: number; y: number; w: number; h: number }
+
+export interface ChassisRect { cx: number; cy: number; w: number; h: number }
+
+const rectCache = new Map<string, ChassisRect[]>();
+
+/**
+ * The chassis outline as a union of convex rectangles: the length x width box minus every cutout. Overlapping/edge-touching cutouts
+ * are fine; cutouts that leave nothing are ignored (the outline never goes empty).
+ */
+export function chassisRects(cfg: Pick<RobotConfig, "length" | "width" | "cutouts">): ChassisRect[] {
+  const cuts = cfg.cutouts ?? [];
+  if (!cuts.length) return [{ cx: 0, cy: 0, w: cfg.width, h: cfg.length }];
+  const key = `${cfg.length}|${cfg.width}|${JSON.stringify(cuts)}`;
+  const hit = rectCache.get(key);
+  if (hit) return hit;
+  const hw = cfg.width / 2, hl = cfg.length / 2;
+  const clampX = (v: number) => Math.max(-hw, Math.min(hw, v)), clampY = (v: number) => Math.max(-hl, Math.min(hl, v));
+  const xs = new Set([-hw, hw]), ys = new Set([-hl, hl]);
+  for (const c of cuts) { xs.add(clampX(c.x - c.w / 2)); xs.add(clampX(c.x + c.w / 2)); ys.add(clampY(c.y - c.h / 2)); ys.add(clampY(c.y + c.h / 2)); }
+  const X = [...xs].sort((a, b) => a - b), Y = [...ys].sort((a, b) => a - b);
+  const inCut = (x: number, y: number) => cuts.some((c) => Math.abs(x - c.x) < c.w / 2 && Math.abs(y - c.y) < c.h / 2);
+  // rows of merged cells, then merge identical rows vertically
+  const rows: { y0: number; y1: number; runs: [number, number][] }[] = [];
+  for (let j = 0; j + 1 < Y.length; j++) {
+    const runs: [number, number][] = [];
+    for (let i = 0; i + 1 < X.length; i++) {
+      if (X[i + 1] - X[i] < 1e-6 || Y[j + 1] - Y[j] < 1e-6 || inCut((X[i] + X[i + 1]) / 2, (Y[j] + Y[j + 1]) / 2)) continue;
+      const last = runs[runs.length - 1];
+      if (last && Math.abs(last[1] - X[i]) < 1e-9) last[1] = X[i + 1]; else runs.push([X[i], X[i + 1]]);
+    }
+    if (runs.length) rows.push({ y0: Y[j], y1: Y[j + 1], runs });
+  }
+  const out: ChassisRect[] = [];
+  const open = new Map<string, { x0: number; x1: number; y0: number; y1: number }>();
+  for (const row of rows) {
+    const seen = new Set<string>();
+    for (const [x0, x1] of row.runs) {
+      const k = `${x0.toFixed(6)}|${x1.toFixed(6)}`;
+      seen.add(k);
+      const o = open.get(k);
+      if (o && Math.abs(o.y1 - row.y0) < 1e-9) o.y1 = row.y1; else { if (o) out.push({ cx: (o.x0 + o.x1) / 2, cy: (o.y0 + o.y1) / 2, w: o.x1 - o.x0, h: o.y1 - o.y0 }); open.set(k, { x0, x1, y0: row.y0, y1: row.y1 }); }
+    }
+    for (const [k, o] of [...open]) if (!seen.has(k)) { out.push({ cx: (o.x0 + o.x1) / 2, cy: (o.y0 + o.y1) / 2, w: o.x1 - o.x0, h: o.y1 - o.y0 }); open.delete(k); }
+  }
+  for (const o of open.values()) out.push({ cx: (o.x0 + o.x1) / 2, cy: (o.y0 + o.y1) / 2, w: o.x1 - o.x0, h: o.y1 - o.y0 });
+  const res = out.length ? out : [{ cx: 0, cy: 0, w: cfg.width, h: cfg.length }];
+  if (rectCache.size > 50) rectCache.clear();
+  rectCache.set(key, res);
+  return res;
 }
 
 export interface IntakeSpec {
@@ -123,6 +178,7 @@ export function defaultRobot(): RobotConfig {
     trackWidth: 12.5,
     length: 15,
     width: 15,
+    cutouts: [],
     mass: 6.5,
     inertia: null,
     wheels: [

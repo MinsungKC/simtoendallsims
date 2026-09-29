@@ -5,7 +5,8 @@ import { samplePath } from "../core/path";
 import type { PathSpec } from "../core/routine";
 import { defaultMotion } from "../core/routine";
 import { obstaclePoly } from "../core/world";
-import { drawCup, drawGoal, drawLoader, drawLyingPin, drawPerimeter, drawStandingPin, drawToggle, PALETTE, type Frame2D } from "./fieldArt";
+import { chassisRects } from "../core/robot";
+import { drawCup, drawGoal, drawLoader, drawLyingCup, drawLyingPin, drawPerimeter, drawStandingPin, drawToggle, PALETTE, type Frame2D } from "./fieldArt";
 import { loaderOutline } from "../games/override";
 import { bearingDeg, frameIndex, lerpFrame, TEAM_COLOR } from "./helpers";
 import { useStore } from "./store";
@@ -112,12 +113,12 @@ export function FieldCanvas() {
     const fr = frames && frames.length ? lerpFrame(frames, time) : null;
     const meta = recording ? recording.world.objects : world.objects;
     const at = (o: (typeof meta)[number], i: number) => {
-      let x = o.x, y = o.y, st = 0;
-      if (fr) { x = fr.objs[i * 3]; y = fr.objs[i * 3 + 1]; st = fr.objs[i * 3 + 2]; }
+      let x = o.x, y = o.y, st = o.lying ? 6 : 0, ang = o.angle ?? 0;
+      if (fr) { x = fr.objs[i * 4]; y = fr.objs[i * 4 + 1]; st = fr.objs[i * 4 + 2]; ang = fr.objs[i * 4 + 3]; }
       else if (o.stackedIn) st = 3;
       else if (o.nestedIn !== undefined) st = 5;
       if (!fr && recording) { x = world.objects[i]?.x ?? o.x; y = world.objects[i]?.y ?? o.y; }
-      return { x, y, st };
+      return { x, y, st, ang };
     };
     const generic = (o: (typeof meta)[number], x: number, y: number) => {
       const r = Math.max(2, o.r * S);
@@ -125,13 +126,13 @@ export function FieldCanvas() {
       else if (o.kind === "mobile-goal") { ctx.beginPath(); ctx.arc(px(x), py(y), r, 0, Math.PI * 2); ctx.fillStyle = "#e2b93b33"; ctx.fill(); ctx.strokeStyle = "#e2b93b"; ctx.lineWidth = 2.5; ctx.stroke(); }
       else { ctx.beginPath(); ctx.arc(px(x), py(y), r, 0, Math.PI * 2); ctx.fillStyle = TEAM_COLOR[o.team]; ctx.fill(); }
     };
-    meta.forEach((o, i) => { const p = at(o, i); if (p.st === 1 || p.st === 3 || o.kind === "pin") return; if (o.kind === "cup") drawCup(F, p.x, p.y, o.opaqueUp); else generic(o, p.x, p.y); });
+    meta.forEach((o, i) => { const p = at(o, i); if (p.st === 1 || p.st === 3 || o.kind === "pin") return; if (o.kind === "cup") { if (p.st === 6) drawLyingCup(F, p.x, p.y, p.ang, o.opaqueUp); else drawCup(F, p.x, p.y, o.opaqueUp); } else generic(o, p.x, p.y); });
     meta.forEach((o, i) => {
       if (o.kind !== "pin") return;
       const p = at(o, i);
       if (p.st === 1 || p.st === 3) return;
       const upper = o.halves ? o.halves[o.flip ? 0 : 1] : "yellow", lower = o.halves ? o.halves[o.flip ? 1 : 0] : "yellow";
-      if (o.lying && p.st === 0) drawLyingPin(F, p.x, p.y, o.angle ?? 0, o.halves, o.flip);
+      if (p.st === 6) drawLyingPin(F, p.x, p.y, p.ang, o.halves, o.flip);
       else drawStandingPin(F, p.x, p.y, upper, lower, p.st !== 5);
     });
     // Goal stacks: what started Placed plus placement events up to the playhead, bottom to top
@@ -198,7 +199,7 @@ export function FieldCanvas() {
       if (dashed) { ctx.setLineDash([4, 3]); ctx.strokeStyle = "#ff6ba8"; ctx.lineWidth = 1.5; ctx.strokeRect(-w / 2, -l / 2, w, l); ctx.setLineDash([]); }
       else {
         ctx.fillStyle = "rgba(80,150,255,0.5)"; ctx.strokeStyle = "#8ec1ff"; ctx.lineWidth = 2;
-        ctx.fillRect(-w / 2, -l / 2, w, l); ctx.strokeRect(-w / 2, -l / 2, w, l);
+        for (const c of chassisRects(robot)) { ctx.fillRect((c.cx - c.w / 2) * S, -(c.cy + c.h / 2) * S, c.w * S, c.h * S); ctx.strokeRect((c.cx - c.w / 2) * S, -(c.cy + c.h / 2) * S, c.w * S, c.h * S); }
         if (robot.intake) { ctx.fillStyle = "rgba(120,220,140,0.25)"; ctx.fillRect(-(robot.intake.width / 2) * S, -l / 2 - robot.intake.reach * S, robot.intake.width * S, robot.intake.reach * S); }
         for (const wh of robot.wheels) for (const side of [-1, 1]) {
           ctx.fillStyle = wh.type === "omni" ? "#eee" : "#222";

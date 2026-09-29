@@ -29,7 +29,7 @@ export function lerpFrame(frames: Frame[], t: number): Frame {
     vx: l(a.vx, b.vx), vy: l(a.vy, b.vy), w: l(a.w, b.w),
     wheelVL: l(a.wheelVL, b.wheelVL), wheelVR: l(a.wheelVR, b.wheelVR),
     battery: l(a.battery, b.battery), current: l(a.current, b.current),
-    objs: a.objs.map((v, k) => (k % 3 === 2 ? v : l(v, b.objs[k]))),
+    objs: a.objs.map((v, k) => (k % 4 === 2 ? v : l(v, b.objs[k]))),
   };
 }
 

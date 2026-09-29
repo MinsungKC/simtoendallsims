@@ -1,4 +1,4 @@
-import { derive, IN, type DerivedRobot, type RobotConfig } from "./robot";
+import { chassisRects, derive, IN, type DerivedRobot, type RobotConfig } from "./robot";
 import { defaultEnv, initialState, step as stepRobot, type Environment, type SimState } from "./physics";
 import { closestOnObb, closestOnPoly, corners, forwardOf, polyContact, rectVerts, RAD, rightOf, type Obb, type Vec } from "./geometry";
 
@@ -41,6 +41,10 @@ export interface GameObject {
   /** Lying on its side: collides as a capsule (a spine of half-length `half` swept by radius `r`) and is drawn lengthwise */
   lying?: boolean;
   half?: number;
+  /** Angular velocity while lying, rad/s (counter-clockwise +) */
+  w?: number;
+  /** Shape of the upright object: it tips over (and then lies as a capsule) when knocked hard enough. Undefined = never tips. */
+  tip?: { height: number; baseR: number; half: number; lyingR: number };
 }
 
 export interface Obstacle {
@@ -93,7 +97,7 @@ export interface ToggleState {
 
 export interface WorldEvent {
   t: number;
-  type: "place" | "toggle" | "pickup" | "reject";
+  type: "place" | "toggle" | "pickup" | "reject" | "tip";
   id?: number;
   goal?: string;
   toggle?: string;
@@ -188,6 +192,12 @@ function extents(o: GameObject): { ex: number; ey: number } {
   return { ex: Math.abs(Math.sin(a)) * o.half + o.r, ey: Math.abs(Math.cos(a)) * o.half + o.r };
 }
 
+/** The chassis as convex boxes in world space (one box unless the robot has cutouts). */
+export function robotPieces(s: SimState, cfg: RobotConfig): Obb[] {
+  const f = forwardOf(s.heading), r = rightOf(s.heading);
+  return chassisRects(cfg).map((c) => ({ x: s.x + f.x * c.cy + r.x * c.cx, y: s.y + f.y * c.cy + r.y * c.cx, heading: s.heading, hl: c.h / 2, hw: c.w / 2 }));
+}
+
 export function robotObb(s: SimState, cfg: RobotConfig): Obb {
   return { x: s.x, y: s.y, heading: s.heading, hl: cfg.length / 2, hw: cfg.width / 2 };
 }
@@ -257,39 +267,117 @@ function staticContact(s: SimState, cfg: RobotConfig, d: DerivedRobot, px: numbe
 function resolveRobotStatics(w: World, cfg: RobotConfig, d: DerivedRobot): void {
   const half = w.env.fieldSize / 2;
   for (let iter = 0; iter < 3; iter++) {
-    for (const c of corners(robotObb(w.robot, cfg))) {
+    const pieces = robotPieces(w.robot, cfg);
+    for (const c of pieces.flatMap(corners)) {
       if (c.x > half) { w.robot = staticContact(w.robot, cfg, d, c.x, c.y, -1, 0, c.x - half); w.contacts++; }
       if (c.x < -half) { w.robot = staticContact(w.robot, cfg, d, c.x, c.y, 1, 0, -half - c.x); w.contacts++; }
       if (c.y > half) { w.robot = staticContact(w.robot, cfg, d, c.x, c.y, 0, -1, c.y - half); w.contacts++; }
       if (c.y < -half) { w.robot = staticContact(w.robot, cfg, d, c.x, c.y, 0, 1, -half - c.y); w.contacts++; }
     }
     for (const o of w.obstacles) {
-      const m = polyContact(corners(robotObb(w.robot, cfg)), obstaclePoly(o));
-      if (m) { w.robot = staticContact(w.robot, cfg, d, m.px, m.py, m.nx, m.ny, m.depth); w.contacts++; }
+      for (const pc of robotPieces(w.robot, cfg)) {
+        const m = polyContact(corners(pc), obstaclePoly(o));
+        if (m) { w.robot = staticContact(w.robot, cfg, d, m.px, m.py, m.nx, m.ny, m.depth); w.contacts++; }
+      }
     }
   }
 }
 
+// ---- loose-object rigid-body dynamics -------------------------------------------------------------------------------
+/** Height (in) at which a robot's intake/bumper meets an upright object; sets how hard a knock tips it. */
+const CONTACT_HEIGHT = 2.5;
+const SLIDE_DECEL = 30; // in/s^2 dragging along a lying object's axis (sliding)
+const ROLL_DECEL = 4; // in/s^2 across its axis (rolling)
+const SPIN_DECEL = 5; // rad/s^2 of yaw friction on a lying object
+
+/** Speed (in/s) of a horizontal knock at CONTACT_HEIGHT that tips an upright object of this shape over its base edge. */
+export function tipSpeed(t: NonNullable<GameObject["tip"]>): number {
+  const H = t.height * IN, r = t.baseR * IN, hc = CONTACT_HEIGHT * IN;
+  const dh = Math.hypot(H / 2, r) - H / 2;
+  const i = (3 * r * r + H * H) / 12 + r * r + (H / 2) * (H / 2); // about the base edge, per unit mass
+  return (Math.sqrt(2 * 9.81 * dh * i) / hc) / IN;
+}
+
+function inertiaLying(o: GameObject): number {
+  // kg*in^2: a rod of the full length plus a little for its width
+  const len = 2 * ((o.half ?? 0) + o.r);
+  return o.mass * (len * len / 12 + (o.r * o.r) / 4);
+}
+
+/** Tip an upright object over, away from (dx, dy). Anything standing inside a Cup is thrown out with it. */
+function tipOver(w: World, o: GameObject, dx: number, dy: number): void {
+  if (!o.tip || o.lying || o.state !== "field") return;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len, uy = dy / len;
+  const shift = Math.max(0, o.tip.height / 2 - o.tip.baseR);
+  o.x += ux * shift; o.y += uy * shift;
+  o.lying = true;
+  o.half = o.tip.half;
+  o.r = o.tip.lyingR;
+  // the top end falls away from the push; a flipped Pin has its halves[0] end up
+  const ang = (Math.atan2(ux, uy) / RAD) + (o.flip ? 180 : 0);
+  o.angle = ang;
+  o.w = 0;
+  w.events.push({ t: w.t, type: "tip", id: o.id });
+  for (const q of w.objects) {
+    if (q.nestedIn !== o.id || q.state !== "nested") continue;
+    q.state = "field"; q.nestedIn = undefined;
+    q.x = o.x + ux * (o.tip.height / 2 + 1); q.y = o.y + uy * (o.tip.height / 2 + 1);
+    q.vx = o.vx; q.vy = o.vy;
+    if (q.tip) { q.lying = true; q.half = q.tip.half; q.r = q.tip.lyingR; q.angle = ang + (q.flip ? 180 : 0) + 0; q.w = 0; }
+  }
+}
+
+/** Impulse between a loose object and something immovable at contact point (px, py); n points from the surface toward the object. */
+function staticImpulse(o: GameObject, px: number, py: number, nx: number, ny: number, e: number): void {
+  const rx = px - o.x, ry = py - o.y;
+  const w = o.lying ? o.w ?? 0 : 0;
+  const vn = (o.vx - w * ry) * nx + (o.vy + w * rx) * ny;
+  if (vn >= 0) return;
+  const rn = rx * ny - ry * nx;
+  const invI = o.lying ? 1 / inertiaLying(o) : 0;
+  const j = (-(1 + e) * vn) / (1 / o.mass + rn * rn * invI);
+  o.vx += (j * nx) / o.mass; o.vy += (j * ny) / o.mass;
+  if (o.lying) o.w = w + j * rn * invI;
+}
+
 function resolveObjects(w: World, cfg: RobotConfig, d: DerivedRobot, dt: number): void {
   const half = w.env.fieldSize / 2;
-  const robot = robotObb(w.robot, cfg);
+  const pieces = robotPieces(w.robot, cfg);
   for (const o of w.objects) {
     if (o.state !== "field" || o.fixed) continue;
-    // sliding friction
-    const sp = Math.hypot(o.vx, o.vy);
-    if (sp > 0) {
-      const ns = Math.max(0, sp - o.drag * dt);
-      o.vx *= ns / sp;
-      o.vy *= ns / sp;
+    // ground friction: a lying object slides along its axis and rolls across it; a standing one just slides
+    if (o.lying) {
+      const a = (o.angle ?? 0) * RAD, ax = Math.sin(a), ay = Math.cos(a);
+      let vpar = o.vx * ax + o.vy * ay, vperp = o.vx * ay - o.vy * ax;
+      vpar = Math.sign(vpar) * Math.max(0, Math.abs(vpar) - SLIDE_DECEL * dt);
+      vperp = Math.sign(vperp) * Math.max(0, Math.abs(vperp) - ROLL_DECEL * dt);
+      o.vx = vpar * ax + vperp * ay; o.vy = vpar * ay - vperp * ax;
+      const wz = o.w ?? 0;
+      o.w = Math.sign(wz) * Math.max(0, Math.abs(wz) - SPIN_DECEL * dt);
+      o.angle = (o.angle ?? 0) - ((o.w ?? 0) * dt) / RAD; // w is counter-clockwise; heading is clockwise
+    } else {
+      const sp = Math.hypot(o.vx, o.vy);
+      if (sp > 0) {
+        const ns = Math.max(0, sp - o.drag * dt);
+        o.vx *= ns / sp;
+        o.vy *= ns / sp;
+      }
     }
     o.x += o.vx * dt;
     o.y += o.vy * dt;
-    // walls
+    // walls: contact at the end of the body that reaches furthest
     const { ex, ey } = extents(o);
-    if (o.x + ex > half) { o.x = half - ex; o.vx = -Math.abs(o.vx) * 0.3; }
-    if (o.x - ex < -half) { o.x = -half + ex; o.vx = Math.abs(o.vx) * 0.3; }
-    if (o.y + ey > half) { o.y = half - ey; o.vy = -Math.abs(o.vy) * 0.3; }
-    if (o.y - ey < -half) { o.y = -half + ey; o.vy = Math.abs(o.vy) * 0.3; }
+    const spineDir = { x: Math.sin((o.angle ?? 0) * RAD), y: Math.cos((o.angle ?? 0) * RAD) };
+    const endToward = (sx: number, sy: number) => {
+      if (!o.lying || !o.half) return { x: o.x, y: o.y };
+      const t = (spineDir.x * sx + spineDir.y * sy) >= 0 ? 1 : -1;
+      return { x: o.x + spineDir.x * o.half * t, y: o.y + spineDir.y * o.half * t };
+    };
+    if (o.x + ex > half) { const e = endToward(1, 0); o.x = half - ex; staticImpulse(o, e.x + o.r, e.y, -1, 0, 0.3); }
+    if (o.x - ex < -half) { const e = endToward(-1, 0); o.x = -half + ex; staticImpulse(o, e.x - o.r, e.y, 1, 0, 0.3); }
+    if (o.y + ey > half) { const e = endToward(0, 1); o.y = half - ey; staticImpulse(o, e.x, e.y + o.r, 0, -1, 0.3); }
+    if (o.y - ey < -half) { const e = endToward(0, -1); o.y = -half + ey; staticImpulse(o, e.x, e.y - o.r, 0, 1, 0.3); }
     // static obstacles (any convex polygon). A lying object is tested at the spine point nearest the obstacle.
     for (const ob of w.obstacles) {
       const poly = obstaclePoly(ob);
@@ -306,13 +394,13 @@ function resolveObjects(w: World, cfg: RobotConfig, d: DerivedRobot, dt: number)
           const ctr = poly.reduce((acc, q) => ({ x: acc.x + q.x / poly.length, y: acc.y + q.y / poly.length }), { x: 0, y: 0 });
           for (let k = 0; k < poly.length; k++) {
             const a = poly[k], b = poly[(k + 1) % poly.length];
-            const ex = b.x - a.x, ey = b.y - a.y;
-            const len = Math.hypot(ex, ey) || 1;
-            let nx = ey / len, ny = -ex / len;
+            const ex2 = b.x - a.x, ey2 = b.y - a.y;
+            const len = Math.hypot(ex2, ey2) || 1;
+            let nx = ey2 / len, ny = -ex2 / len;
             const c = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
             if ((c.x - ctr.x) * nx + (c.y - ctr.y) * ny < 0) { nx = -nx; ny = -ny; }
-            const d = Math.abs((ref.x - a.x) * nx + (ref.y - a.y) * ny);
-            if (d < bestD) { bestD = d; bn = { x: nx, y: ny }; bp = { x: ref.x + nx * d, y: ref.y + ny * d }; }
+            const dd = Math.abs((ref.x - a.x) * nx + (ref.y - a.y) * ny);
+            if (dd < bestD) { bestD = dd; bn = { x: nx, y: ny }; bp = { x: ref.x + nx * dd, y: ref.y + ny * dd }; }
           }
           dx = bn.x; dy = bn.y;
           px = bp.x + dx * o.r; py = bp.y + dy * o.r;
@@ -321,33 +409,33 @@ function resolveObjects(w: World, cfg: RobotConfig, d: DerivedRobot, dt: number)
           px = cp.x + dx * o.r; py = cp.y + dy * o.r;
         }
         o.x += px - ref.x; o.y += py - ref.y;
-        const vn = o.vx * dx + o.vy * dy;
-        if (vn < 0) { o.vx -= 1.3 * vn * dx; o.vy -= 1.3 * vn * dy; }
+        const speed = -(o.vx * dx + o.vy * dy);
+        staticImpulse(o, cp.x, cp.y, dx, dy, 0.3);
+        if (o.tip && !o.lying && speed > tipSpeed(o.tip) * 1.5) tipOver(w, o, -dx, -dy);
       }
     }
-    // robot vs object (two-body impulse; the object is a point mass with no spin)
-    {
-      let ref = spinePoint(o, robot.x, robot.y);
-      if (o.lying) { const c0 = closestOnObb(robot, ref.x, ref.y); ref = spinePoint(o, c0.x, c0.y); }
-      const cp = closestOnObb(robot, ref.x, ref.y);
+    // robot vs object: every chassis piece (a notched chassis can straddle a Goal or hold a Pin in its slot)
+    for (const piece of pieces) {
+      let ref = spinePoint(o, piece.x, piece.y);
+      if (o.lying) { const c0 = closestOnObb(piece, ref.x, ref.y); ref = spinePoint(o, c0.x, c0.y); }
+      const cp = closestOnObb(piece, ref.x, ref.y);
       let nx = ref.x - cp.x, ny = ref.y - cp.y;
       const dist = Math.hypot(nx, ny);
-      if (cp.inside || dist < o.r) {
-        let px: number, py: number;
-        if (cp.inside || dist < 1e-6) {
-          const f = forwardOf(robot.heading), r = rightOf(robot.heading);
-          const lf = (ref.x - robot.x) * f.x + (ref.y - robot.y) * f.y;
-          const lr = (ref.x - robot.x) * r.x + (ref.y - robot.y) * r.y;
-          if (robot.hl - Math.abs(lf) < robot.hw - Math.abs(lr)) { const sg = Math.sign(lf) || 1; nx = f.x * sg; ny = f.y * sg; }
-          else { const sg = Math.sign(lr) || 1; nx = r.x * sg; ny = r.y * sg; }
-          px = cp.x + nx * o.r; py = cp.y + ny * o.r;
-        } else {
-          nx /= dist; ny /= dist;
-          px = cp.x + nx * o.r; py = cp.y + ny * o.r;
-        }
-        o.x += px - ref.x; o.y += py - ref.y;
-        resolveRobotObject(w, cfg, d, o, cp.x, cp.y, nx, ny);
+      if (!(cp.inside || dist < o.r)) continue;
+      let px: number, py: number;
+      if (cp.inside || dist < 1e-6) {
+        const f = forwardOf(piece.heading), r = rightOf(piece.heading);
+        const lf = (ref.x - piece.x) * f.x + (ref.y - piece.y) * f.y;
+        const lr = (ref.x - piece.x) * r.x + (ref.y - piece.y) * r.y;
+        if (piece.hl - Math.abs(lf) < piece.hw - Math.abs(lr)) { const sg = Math.sign(lf) || 1; nx = f.x * sg; ny = f.y * sg; }
+        else { const sg = Math.sign(lr) || 1; nx = r.x * sg; ny = r.y * sg; }
+        px = cp.x + nx * o.r; py = cp.y + ny * o.r;
+      } else {
+        nx /= dist; ny /= dist;
+        px = cp.x + nx * o.r; py = cp.y + ny * o.r;
       }
+      o.x += px - ref.x; o.y += py - ref.y;
+      resolveRobotObject(w, cfg, d, o, cp.x, cp.y, nx, ny);
     }
   }
   // object-object (lying objects collide along their spine)
@@ -373,17 +461,26 @@ function resolveObjects(w: World, cfg: RobotConfig, d: DerivedRobot, dt: number)
       if (tot === 0) continue;
       a.x -= nx * overlap * (ia / tot); a.y -= ny * overlap * (ia / tot);
       b.x += nx * overlap * (ib / tot); b.y += ny * overlap * (ib / tot);
-      const vn = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
-      if (vn < 0) {
-        const jn = (-(1 + 0.2) * vn) / tot;
-        a.vx -= jn * ia * nx; a.vy -= jn * ia * ny;
-        b.vx += jn * ib * nx; b.vy += jn * ib * ny;
+      // contact impulse with torque on lying bodies (n points from a to b)
+      const cx = (pa.x + pb.x) / 2, cy = (pa.y + pb.y) / 2;
+      const ra = { x: cx - a.x, y: cy - a.y }, rb = { x: cx - b.x, y: cy - b.y };
+      const wa = a.lying ? a.w ?? 0 : 0, wb = b.lying ? b.w ?? 0 : 0;
+      const vrel = (b.vx - wb * rb.y - (a.vx - wa * ra.y)) * nx + (b.vy + wb * rb.x - (a.vy + wa * ra.x)) * ny;
+      if (vrel < 0) {
+        const rna = ra.x * ny - ra.y * nx, rnb = rb.x * ny - rb.y * nx;
+        const iIa = a.lying && !a.fixed ? 1 / inertiaLying(a) : 0, iIb = b.lying && !b.fixed ? 1 / inertiaLying(b) : 0;
+        const jn = (-(1 + 0.2) * vrel) / (ia + ib + rna * rna * iIa + rnb * rnb * iIb);
+        a.vx -= jn * ia * nx; a.vy -= jn * ia * ny; if (a.lying) a.w = wa - jn * rna * iIa;
+        b.vx += jn * ib * nx; b.vy += jn * ib * ny; if (b.lying) b.w = wb + jn * rnb * iIb;
+        const sp = -vrel;
+        if (a.tip && !a.lying && sp > tipSpeed(a.tip) * 1.5) tipOver(w, a, -nx, -ny);
+        if (b.tip && !b.lying && sp > tipSpeed(b.tip) * 1.5) tipOver(w, b, nx, ny);
       }
     }
   }
 }
 
-/** n points from the robot toward the object. */
+/** n points from the robot toward the object; (cx, cy) is the contact point on the chassis. */
 function resolveRobotObject(w: World, cfg: RobotConfig, d: DerivedRobot, o: GameObject, cx: number, cy: number, nx: number, ny: number): void {
   const b = robotBody(w.robot);
   const m = cfg.mass;
@@ -392,20 +489,26 @@ function resolveRobotObject(w: World, cfg: RobotConfig, d: DerivedRobot, o: Game
   // robot contact-point velocity, m/s
   const vrx = b.vx * IN - b.wz * ry;
   const vry = b.vy * IN + b.wz * rx;
-  const vox = o.vx * IN, voy = o.vy * IN;
+  const orx = (cx - o.x) * IN, ory = (cy - o.y) * IN;
+  const ow = o.lying ? o.w ?? 0 : 0;
+  const vox = o.vx * IN - ow * ory, voy = o.vy * IN + ow * orx;
   const vn = (vox - vrx) * nx + (voy - vry) * ny; // object relative to robot along n
   if (vn >= 0) return; // separating
   const rn = rx * ny - ry * nx;
   const mo = o.fixed ? 1e9 : o.mass;
-  const invSum = 1 / m + (rn * rn) / I + 1 / mo;
+  const Io = o.lying ? o.mass * (Math.pow(2 * (o.half ?? 0) + 2 * o.r, 2) * IN * IN / 12 + (o.r * o.r * IN * IN) / 4) : Infinity;
+  const rno = orx * ny - ory * nx;
+  const invSum = 1 / m + (rn * rn) / I + 1 / mo + (o.lying ? (rno * rno) / Io : 0);
   const j = (-(1 + 0.15) * vn) / invSum;
   // object gets +j n, robot gets -j n
   o.vx += ((j * nx) / mo) / IN;
   o.vy += ((j * ny) / mo) / IN;
+  if (o.lying) o.w = ow + (j * rno) / Io;
   b.vx -= (j * nx) / m / IN;
   b.vy -= (j * ny) / m / IN;
   b.wz -= (j * rn) / I;
   w.robot = writeBody(w.robot, b);
+  if (o.tip && !o.lying && -vn / IN > tipSpeed(o.tip)) tipOver(w, o, nx, ny);
 }
 
 function updateMechanisms(w: World, cfg: RobotConfig): void {

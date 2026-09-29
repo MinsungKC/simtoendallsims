@@ -20,7 +20,7 @@ export interface Frame {
   battery: number; current: number;
   slip: boolean;
   step: number;
-  /** flattened [x, y, stateCode] per object; state 0 field, 1 held, 2 carried, 3 stacked in a Goal, 4 field but upright (a Pin that started lying), 5 riding inside a Cup */
+  /** flattened [x, y, stateCode, angle] per object; state 0 field, 1 held, 2 carried, 3 stacked in a Goal, 5 riding inside a Cup, 6 lying on its side (angle = direction of its far end) */
   objs: number[];
   held: number;
 }
@@ -112,7 +112,7 @@ export function simulate(routine: Routine, cfg: RobotConfig, init: WorldInit, op
     const s = world.robot;
     const est = odom.getPose();
     const objs: number[] = [];
-    for (const o of world.objects) objs.push(o.x, o.y, o.state === "field" ? (o.lying === false ? 4 : 0) : o.state === "held" ? 1 : o.state === "carried" ? 2 : o.state === "nested" ? 5 : 3);
+    for (const o of world.objects) objs.push(o.x, o.y, o.state === "field" ? (o.lying ? 6 : 0) : o.state === "held" ? 1 : o.state === "carried" ? 2 : o.state === "nested" ? 5 : 3, o.angle ?? 0);
     frames.push({
       t: world.t, x: s.x, y: s.y, heading: s.heading, vx: s.vx, vy: s.vy, w: s.w,
       ex: est.x, ey: est.y, etheta: est.theta,

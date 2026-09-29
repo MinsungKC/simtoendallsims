@@ -69,6 +69,20 @@ export function drawCup(f: Frame2D, x: number, y: number, opaqueUp: boolean | un
   });
 }
 
+/** A Cup lying on its side: a 3.15" x 6.5" rounded body, clear half at one end and opaque half at the other. `angle` points at the top end. */
+export function drawLyingCup(f: Frame2D, x: number, y: number, angle: number, opaqueUp: boolean | undefined): void {
+  const { ctx } = f;
+  local(f, x, y, angle, () => {
+    const r = CUP.r, L = CUP.height / 2;
+    const top = opaqueUp ? PALETTE.cupOpaque : PALETTE.cupClear, bottom = opaqueUp ? PALETTE.cupClear : PALETTE.cupOpaque;
+    ctx.beginPath(); ctx.rect(-r, 0, 2 * r, L); ctx.fillStyle = top; ctx.fill();
+    ctx.beginPath(); ctx.rect(-r, -L, 2 * r, L); ctx.fillStyle = bottom; ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,0.18)"; ctx.fillRect(-r * 0.35, -L, r * 0.3, 2 * L);
+    ctx.strokeStyle = PALETTE.ink; ctx.lineWidth = 0.11; ctx.strokeRect(-r, -L, 2 * r, 2 * L);
+    ctx.beginPath(); ctx.moveTo(-r, 0); ctx.lineTo(r, 0); ctx.stroke();
+  });
+}
+
 // ---- Pins
 /** A Pin standing on end, seen from above: the flange ring in the upper color and a hexagon showing both halves. */
 export function drawStandingPin(f: Frame2D, x: number, y: number, upper: string, lower: string, flange: boolean): void {

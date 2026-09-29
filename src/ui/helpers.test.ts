@@ -8,7 +8,7 @@ import type { Frame } from "../core/runtime";
 
 const frame = (t: number, x: number): Frame => ({
   t, x, y: 0, heading: 0, vx: 0, vy: 0, w: 0, ex: x, ey: 0, etheta: 0, wheelVL: 0, wheelVR: 0, cmdL: 0, cmdR: 0,
-  battery: 12, current: 0, slip: false, step: 0, objs: [x, 0, 0], held: 0,
+  battery: 12, current: 0, slip: false, step: 0, objs: [x, 0, 0, 0], held: 0,
 });
 
 describe("playback helpers", () => {
