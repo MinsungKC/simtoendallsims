@@ -1,13 +1,14 @@
 import { avoidObstacles } from "./autoroute";
 import { fitStroke } from "./fit";
 import { pathLength } from "./path";
-import type { RobotConfig } from "./robot";
+import { scoreSpecOf, type RobotConfig } from "./robot";
 import { defaultMotion, uid, type ActionSpec, type MotionSpec, type Routine, type Step } from "./routine";
 import { simulate, type Recording } from "./runtime";
 import { optimizeTimeouts } from "./tune";
 import type { Obstacle, WorldInit } from "./world";
 import type { GameModule } from "../games/types";
 import { normalize } from "./common-plan";
+import { createWorld, maxHold, type GameObject } from "./world";
 
 export type TaskAction = "pickup" | "place" | "toggle";
 
@@ -26,6 +27,9 @@ export interface PlanTask {
   toggleColor?: "red" | "blue" | "yellow";
   /** True when the piece lies on its side (a rear roller that takes only standing pieces can't get it) */
   lying?: boolean;
+  /** The Goal id or piece id clicked, so the planner knows what will be held / what a Goal already contains */
+  refId?: string | number;
+  pieceKind?: string;
 }
 
 export interface PlanCandidate {
@@ -42,7 +46,7 @@ const dist = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.
 
 function sidesFor(task: PlanTask, cfg: RobotConfig): ("front" | "back")[] {
   if (task.side !== "auto") return [task.side];
-  if (task.action === "place") return [cfg.scoreSide ?? "front"];
+  if (task.action === "place") return [scoreSpecOf(cfg).side];
   if (task.action === "toggle") return ["front"];
   const out: ("front" | "back")[] = [];
   if (cfg.intake && !(cfg.intake.standingOnly && task.lying)) out.push("front");
@@ -53,10 +57,10 @@ function sidesFor(task: PlanTask, cfg: RobotConfig): ("front" | "back")[] {
 /** Robot-center distance from the element along the approach line, for this job. */
 function standoff(task: PlanTask, cfg: RobotConfig, side: "front" | "back"): number {
   const L = cfg.length / 2;
-  if (task.action === "place") return L + 5.5;
+  if (task.action === "place") { const sc = scoreSpecOf(cfg); return sc.inset ? L - sc.inset + 1 : L + 5.5; }
   if (task.action === "toggle") return L + 1.5;
   const spec = side === "front" ? cfg.intake : cfg.rearIntake;
-  return L + (spec ? spec.reach * 0.5 : 2);
+  return spec ? L - (spec.inset ?? 0) + spec.reach * 0.5 : L + 2;
 }
 
 interface Variant { style: "pose" | "point" | "curve"; speed: number; offset: number; sideRank: number }
@@ -147,6 +151,66 @@ function simplifyIdx(pts: { x: number; y: number }[], tol: number): number[] {
   };
   rec(0, pts.length - 1);
   return [...keep].sort((x, y) => x - y);
+}
+
+/**
+ * Walk the task list with the robot's hands: what it holds at the start (the Preload), what each pickup adds, what each place uses.
+ * Fixes what it can (a pickup blocked by the Preload gets a "score the Preload first" stop in front of it) and explains what it can't,
+ * so "no route" is never a mystery.
+ */
+export function prepareTasks(a: { tasks: PlanTask[]; game: GameModule; world: WorldInit; cfg: RobotConfig; routine: Routine }): { tasks: PlanTask[]; notes: string[]; errors: string[] } {
+  const w = createWorld(a.world, a.routine.start);
+  w.alliance = a.routine.alliance;
+  const rules = a.game.rules;
+  const inv: GameObject[] = w.held.map((id) => w.objects.find((o) => o.id === id)!).filter(Boolean);
+  const goals = w.goals.map((g) => ({ ...g, stack: [...g.stack] }));
+  const notes: string[] = [], errors: string[] = [];
+  const out: PlanTask[] = [];
+  let at = { x: a.routine.start.x, y: a.routine.start.y };
+  const canTake = (kind: string) => {
+    const lim = rules?.possession?.[kind];
+    return inv.length < maxHold(a.cfg) && (lim === undefined || inv.filter((o) => o.kind === kind).length < lim);
+  };
+  const accepts = (g: (typeof goals)[number], o: GameObject) => (!g.alliance || g.alliance === a.routine.alliance) && (rules ? rules.canStack(g as never, o) : true);
+  const bestGoal = (o: GameObject) => goals.filter((g) => accepts(g, o)).sort((p, q) => Number(q.alliance === a.routine.alliance) - Number(p.alliance === a.routine.alliance) || dist(p, at) - dist(q, at))[0];
+  const placeInto = (g: (typeof goals)[number], o: GameObject) => { g.stack.push({ id: o.id, kind: o.kind, halves: o.halves, opaqueUp: o.opaqueUp, flip: o.flip }); inv.splice(inv.indexOf(o), 1); };
+  const nameOf = (o: GameObject) => (o.kind === "pin" ? `${o.halves?.join("/") ?? ""} Pin` : o.kind);
+
+  for (const t of a.tasks) {
+    if (t.action === "pickup") {
+      const obj = t.refId !== undefined ? w.objects.find((o) => o.id === t.refId) : undefined;
+      const inner = obj ? w.objects.find((o) => o.nestedIn === obj.id) : undefined;
+      const kinds = [obj?.kind ?? t.pieceKind, inner?.kind].filter(Boolean) as string[];
+      for (const kind of kinds) {
+        let guard = 0;
+        while (!canTake(kind) && guard++ < 4) {
+          const blocking = inv.find((o) => o.kind === kind) ?? inv[0];
+          const g = blocking ? bestGoal(blocking) : undefined;
+          if (!blocking || !g) { errors.push(`Stop "${t.label}": the robot is full (${inv.map(nameOf).join(", ") || "nothing"}) and there is no Goal that will take what it holds.`); break; }
+          out.push({ id: uid("t"), label: `Score ${nameOf(blocking)} on ${g.id}`, x: g.x, y: g.y, targetKind: "goal", action: "place", side: "auto", approach: "auto", refId: g.id });
+          notes.push(`Added a stop to score the ${nameOf(blocking)} you start with on ${g.id} before "${t.label}" - the robot can only hold ${rules?.possession?.[kind] ?? "a limited number of"} ${kind}${(rules?.possession?.[kind] ?? 2) === 1 ? "" : "s"} at a time.`);
+          placeInto(g, blocking);
+          at = { x: g.x, y: g.y };
+        }
+      }
+      if (obj) { inv.push(obj); if (inner) inv.push(inner); }
+      else if (t.pieceKind) inv.push({ kind: t.pieceKind } as GameObject);
+    } else if (t.action === "place") {
+      const g = goals.find((q) => q.id === t.refId) ?? goals.slice().sort((p, q) => dist(p, t) - dist(q, t))[0];
+      if (!g) { errors.push(`Stop "${t.label}": no Goal there.`); out.push(t); continue; }
+      if (g.alliance && g.alliance !== a.routine.alliance) errors.push(`Stop "${t.label}": that is the opposing Alliance's Goal - you may not score in it.`);
+      else if (!inv.length) errors.push(`Stop "${t.label}": the robot isn't holding anything by then. Add a pickup before it (you start holding only the Preload).`);
+      else {
+        const item = inv.find((o) => accepts(g, o));
+        if (!item) errors.push(`Stop "${t.label}": ${g.id} can't take ${inv.map(nameOf).join(" or ")} right now. A Pin goes into an empty Goal or onto a Cup; a Cup goes over a Pin. It holds ${g.stack.length ? g.stack.map((s) => s.kind).join(" + ") : "nothing"}. Try another Goal, or pick up a Cup first.`);
+        else placeInto(g, item);
+      }
+      at = { x: g.x, y: g.y };
+    }
+    out.push(t);
+    at = { x: t.x, y: t.y };
+  }
+  return { tasks: out, notes, errors };
 }
 
 export interface PlanArgs {

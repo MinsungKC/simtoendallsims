@@ -7,7 +7,7 @@ import { pathLength, samplePath } from "../core/path";
 import type { PathSpec } from "../core/routine";
 import { defaultMotion } from "../core/routine";
 import { obstaclePoly } from "../core/world";
-import { chassisRects } from "../core/robot";
+import { chassisRects, scoreSpecOf } from "../core/robot";
 import { drawCup, drawGoal, drawLoader, drawLyingCup, drawLyingPin, drawPerimeter, drawStandingPin, drawToggle, PALETTE, type Frame2D } from "./fieldArt";
 import { loaderOutline } from "../games/override";
 import { bearingDeg, frameIndex, lerpFrame, TEAM_COLOR } from "./helpers";
@@ -238,8 +238,9 @@ export function FieldCanvas() {
       else {
         ctx.fillStyle = "rgba(80,150,255,0.5)"; ctx.strokeStyle = "#8ec1ff"; ctx.lineWidth = 2;
         for (const c of chassisRects(robot)) { ctx.fillRect((c.cx - c.w / 2) * S, -(c.cy + c.h / 2) * S, c.w * S, c.h * S); ctx.strokeRect((c.cx - c.w / 2) * S, -(c.cy + c.h / 2) * S, c.w * S, c.h * S); }
-        if (overlays.zones && robot.intake) { ctx.fillStyle = "rgba(120,220,140,0.25)"; ctx.fillRect(-(robot.intake.width / 2) * S, -l / 2 - robot.intake.reach * S, robot.intake.width * S, robot.intake.reach * S); }
-        if (overlays.zones && robot.rearIntake) { ctx.fillStyle = robot.rearIntake.standingOnly ? "rgba(90,200,230,0.25)" : "rgba(120,220,140,0.25)"; ctx.fillRect(-(robot.rearIntake.width / 2) * S, l / 2, robot.rearIntake.width * S, robot.rearIntake.reach * S); }
+        if (overlays.zones && robot.intake) { ctx.fillStyle = "rgba(120,220,140,0.25)"; ctx.fillRect(((robot.intake.x ?? 0) - robot.intake.width / 2) * S, -l / 2 + (robot.intake.inset ?? 0) * S - robot.intake.reach * S, robot.intake.width * S, robot.intake.reach * S); }
+        if (overlays.zones && robot.rearIntake) { ctx.fillStyle = robot.rearIntake.standingOnly ? "rgba(90,200,230,0.25)" : "rgba(120,220,140,0.25)"; ctx.fillRect(((robot.rearIntake.x ?? 0) - robot.rearIntake.width / 2) * S, l / 2 - (robot.rearIntake.inset ?? 0) * S, robot.rearIntake.width * S, robot.rearIntake.reach * S); }
+        if (overlays.zones) { const sc = scoreSpecOf(robot); const yy = (sc.side === "front" ? -1 : 1) * (l / 2 - (sc.inset ?? 0) * S); ctx.fillStyle = "#ffd24a"; ctx.beginPath(); ctx.arc((sc.x ?? 0) * S, yy, 3, 0, Math.PI * 2); ctx.fill(); }
         for (const wh of robot.wheels) for (const side of [-1, 1]) {
           ctx.fillStyle = wh.type === "omni" ? "#eee" : "#222";
           const wl = robot.wheelDiameter * S;
@@ -347,9 +348,9 @@ export function FieldCanvas() {
       const g = st.game();
       const objs = (st.customField?.objects ?? g.objects).filter((o) => !o.stackedIn && o.nestedIn === undefined);
       const cands: { d: number; t: Omit<import("../core/planner").PlanTask, "id"> }[] = [];
-      for (const q of g.goals ?? []) cands.push({ d: Math.hypot(q.x - p.x, q.y - p.y) - 2, t: { label: `Goal ${q.id}`, x: q.x, y: q.y, targetKind: "goal", action: "place", side: "auto", approach: "auto" } });
+      for (const q of g.goals ?? []) cands.push({ d: Math.hypot(q.x - p.x, q.y - p.y) - 2, t: { label: `Goal ${q.id}`, x: q.x, y: q.y, targetKind: "goal", action: "place", side: "auto", approach: "auto", refId: q.id } });
       for (const q of g.toggles ?? []) cands.push({ d: Math.max(0, Math.hypot(q.x - p.x, q.y - p.y) - 10), t: { label: `Toggle ${q.wall}`, x: q.x, y: q.y, targetKind: "toggle", action: "toggle", side: "front", approach: { N: 0, E: 90, S: 180, W: 270 }[q.wall] } });
-      for (const q of objs) cands.push({ d: Math.hypot(q.x - p.x, q.y - p.y) - q.r, t: { label: q.kind === "cup" ? "Cup" : q.kind === "pin" ? "Pin" : q.kind, x: q.x, y: q.y, targetKind: "object", action: "pickup", side: "auto", approach: "auto", lying: !!q.lying } });
+      for (const q of objs) cands.push({ d: Math.hypot(q.x - p.x, q.y - p.y) - q.r, t: { label: q.kind === "cup" ? "Cup" : q.kind === "pin" ? "Pin" : q.kind, x: q.x, y: q.y, targetKind: "object", action: "pickup", side: "auto", approach: "auto", lying: !!q.lying, refId: q.id, pieceKind: q.kind } });
       cands.sort((a, b) => a.d - b.d);
       if (cands[0] && cands[0].d < 4) st.addTask(cands[0].t);
       return;

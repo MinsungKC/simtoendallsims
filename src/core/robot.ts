@@ -89,8 +89,10 @@ export interface RobotConfig {
   intake: IntakeSpec | null;
   /** Second capture zone on the back of the robot. null/undefined = none. */
   rearIntake?: IntakeSpec | null;
-  /** Which end of the robot scores (Place action reaches out of it). Default front. */
+  /** Which end of the robot scores (Place action reaches out of it). Default front. Prefer `scoring` for full control. */
   scoreSide?: "front" | "back";
+  /** Where the scoring mechanism is: which end, sideways offset, and how far INSIDE the frame it sits (e.g. in a goal-aligner cutout). */
+  scoring?: ScoreSpec;
   /** Tallest stack (pieces) the scoring mechanism can add to. Undefined = unlimited. */
   maxStack?: number;
 }
@@ -148,7 +150,26 @@ export function chassisRects(cfg: Pick<RobotConfig, "length" | "width" | "cutout
   return res;
 }
 
+/** The scoring point: where a Goal has to be for the Place action to work, in the robot frame. */
+export interface ScoreSpec {
+  side: "front" | "back";
+  /** sideways offset of the point, + = right of center (as seen from the robot) */
+  x?: number;
+  /** how far inside the frame edge the point sits, in (a mechanism in a cutout: the Goal reaches into the chassis) */
+  inset?: number;
+  /** how far from the point a Goal's center may be, in (default: the game's Goal reach) */
+  reach?: number;
+}
+
+export function scoreSpecOf(cfg: Pick<RobotConfig, "scoring" | "scoreSide">): ScoreSpec {
+  return cfg.scoring ?? { side: cfg.scoreSide ?? "front" };
+}
+
 export interface IntakeSpec {
+  /** sideways offset of the pickup zone's center, + = right (default 0) */
+  x?: number;
+  /** how far the zone starts INSIDE the frame edge, in (pickup mechanism sitting in a cutout). Default 0 = starts at the edge. */
+  inset?: number;
   /** Depth ahead of the front edge, inches */
   reach: number;
   /** Width of the capture zone, inches */

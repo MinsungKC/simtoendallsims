@@ -8,7 +8,7 @@ import { worldInit, type CustomField, type GameModule } from "../games/types";
 import { defaultPorts, type Ports, type TargetId } from "../codegen";
 import type { CodeFrame } from "../core/frame";
 import { optimizeTimeouts as optimizeTimeoutsCore } from "../core/tune";
-import { planRoutes, type PlanCandidate, type PlanTask } from "../core/planner";
+import { planRoutes, prepareTasks, type PlanCandidate, type PlanTask } from "../core/planner";
 
 export interface Overlays { plan: boolean; trail: boolean; odom: boolean; footprints: boolean; dots: boolean; zones: boolean; tape: boolean; pieces: boolean }
 export const OVERLAY_LABELS: Record<keyof Overlays, string> = {
@@ -75,6 +75,8 @@ interface Store {
   setCodeFrame: (f: CodeFrame) => void;
   tasks: PlanTask[];
   plans: PlanCandidate[] | null;
+  planNotes: string[];
+  planErrors: string[];
   planning: number | null;
   addTask: (t: Omit<PlanTask, "id">) => void;
   updateTask: (id: string, patch: Partial<PlanTask>) => void;
@@ -318,6 +320,8 @@ export const useStore = create<Store>((set, get) => {
     setTarget: (target) => { set({ target }); persist(get()); },
     tasks: [],
     plans: null,
+    planNotes: [],
+    planErrors: [],
     planning: null,
     addTask: (t) => set((s) => ({ tasks: [...s.tasks, { ...t, id: uid("t") }], plans: null })),
     updateTask: (id, patch) => set((s) => ({ tasks: s.tasks.map((t) => (t.id === id ? { ...t, ...patch } : t)), plans: null })),
@@ -331,9 +335,12 @@ export const useStore = create<Store>((set, get) => {
       const init = worldInit(g, s.routine.alliance);
       const world = s.customField ? { ...init, objects: [...s.customField.objects, ...init.objects.filter((o) => o.held)], obstacles: s.customField.obstacles } : init;
       stopFlag = false;
-      set({ planning: 0, plans: null });
+      const base = { ...s.routine, steps: [] };
+      const prep = prepareTasks({ tasks: s.tasks, game: g, world, cfg: s.robot, routine: base });
+      set({ planning: 0, plans: null, planNotes: prep.notes, planErrors: prep.errors });
+      if (prep.errors.length) { set({ plans: [], planning: null }); return; }
       const plans = await planRoutes({
-        routine: { ...s.routine, steps: [] }, tasks: s.tasks, cfg: s.robot, game: g, world, obstacles: world.obstacles, seed: s.simOpts.seed,
+        routine: base, tasks: prep.tasks, cfg: s.robot, game: g, world, obstacles: world.obstacles, seed: s.simOpts.seed,
         onProgress: (p) => set({ planning: p }), shouldStop: () => stopFlag,
       });
       set({ plans, planning: null });

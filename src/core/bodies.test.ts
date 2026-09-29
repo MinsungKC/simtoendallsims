@@ -96,3 +96,16 @@ describe("front and rear pickup, scoring side", () => {
     expect(fr({ lying: true, half: 2.2, angle: 90 })).toBe("held");
   });
 });
+
+describe("scoring mechanism inside the chassis", () => {
+  it("a score point inset into a cutout reaches a Goal that a front-edge point can't", async () => {
+    const { placeHeld } = await import("./world");
+    const make = (scoring: { side: "front" | "back"; inset?: number; reach?: number }) => {
+      const c = { ...cfg, scoring, cutouts: [{ x: 0, y: 6.5, w: 6.2, h: 2 }] };
+      const w = createWorld({ ...base, objects: [pin({ id: 5, held: true, x: 0, y: 0 })], goals: [{ id: "g", x: 0, y: 5.6, kind: "short", height: 5.8, reach: 11 } as never], obstacles: [] }, { x: 0, y: 0, heading: 0 });
+      return placeHeld(w, c);
+    };
+    expect(make({ side: "front", reach: 0.5 })).toContain("no goal"); // Goal sitting 5.6 ahead of center, i.e. 1.9 behind the front edge point
+    expect(make({ side: "front", inset: 2, reach: 0.5 })).toBeNull(); // the point sits in the slot, right at the Goal
+  });
+});

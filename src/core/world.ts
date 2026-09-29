@@ -1,4 +1,4 @@
-import { chassisRects, derive, IN, type DerivedRobot, type RobotConfig } from "./robot";
+import { chassisRects, derive, IN, scoreSpecOf, type DerivedRobot, type RobotConfig } from "./robot";
 import { defaultEnv, initialState, step as stepRobot, type Environment, type SimState } from "./physics";
 import { closestOnObb, closestOnPoly, corners, forwardOf, polyContact, rectVerts, RAD, rightOf, type Obb, type Vec } from "./geometry";
 
@@ -537,9 +537,11 @@ function updateMechanisms(w: World, cfg: RobotConfig): void {
   ];
   for (const zn of zones) {
     if (!zn.on || !zn.spec) continue;
+    const along = cfg.length / 2 - (zn.spec.inset ?? 0) + zn.spec.reach / 2;
+    const side = zn.spec.x ?? 0;
     const zone: Obb = {
-      x: s.x + f.x * zn.dir * (cfg.length / 2 + zn.spec.reach / 2),
-      y: s.y + f.y * zn.dir * (cfg.length / 2 + zn.spec.reach / 2),
+      x: s.x + f.x * zn.dir * along + r.x * side,
+      y: s.y + f.y * zn.dir * along + r.y * side,
       heading: s.heading,
       hl: zn.spec.reach / 2,
       hw: zn.spec.width / 2,
@@ -595,15 +597,17 @@ export function placeHeld(w: World, cfg: RobotConfig, prefer?: string): string |
     return placed > 0 ? null : why;
   }
   if (w.held.length === 0) return "nothing held to place";
-  const back = cfg.scoreSide === "back";
-  const fp = frontPoint(w, cfg, back);
-  const f = forwardOf(w.robot.heading);
+  const sc = scoreSpecOf(cfg);
+  const back = sc.side === "back";
+  const f = forwardOf(w.robot.heading), rr = rightOf(w.robot.heading);
+  const along = (cfg.length / 2 - (sc.inset ?? 0)) * (back ? -1 : 1);
+  const fp = { x: w.robot.x + f.x * along + rr.x * (sc.x ?? 0), y: w.robot.y + f.y * along + rr.y * (sc.x ?? 0) };
   const side = back ? "behind" : "in front of";
   let goal: GoalState | null = null, gd = Infinity;
   for (const g of w.goals) {
     const d = Math.hypot(g.x - fp.x, g.y - fp.y);
     const ahead = ((g.x - w.robot.x) * f.x + (g.y - w.robot.y) * f.y) * (back ? -1 : 1);
-    if (d <= g.reach && ahead > 0 && d < gd) { goal = g; gd = d; }
+    if (d <= (sc.reach ?? g.reach) && ahead > 0 && d < gd) { goal = g; gd = d; }
   }
   if (!goal) { w.events.push({ t: w.t, type: "reject", text: `no goal within reach ${side} the robot` }); return `no goal within reach ${side} the robot`; }
   if (goal.alliance && goal.alliance !== w.alliance) { w.events.push({ t: w.t, type: "reject", goal: goal.id, text: "opposing Alliance Goal (SG9)" }); return `that is the opposing Alliance's Goal (rule SG9)`; }

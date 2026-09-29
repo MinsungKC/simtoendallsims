@@ -33,13 +33,16 @@ export function PlanPanel() {
           {st.planning !== null && <button onClick={st.stopPlan}>Stop</button>}
         </div>
       )}
-      {st.plans && st.planning === null && (
+      {st.planNotes.map((n, i) => <p key={i} className="note">ℹ {n}</p>)}
+      {st.planErrors.map((n, i) => <p key={i} className="bad">✖ {n}</p>)}
+      {st.plans && st.planning === null && st.planErrors.length === 0 && (
         <>
-          {top.length === 0 && <p className="bad">None of the {st.plans.length} routes tried worked. {failed[0] ? `Closest: ${failed[0].problems.slice(0, 2).join("; ")}.` : ""} Try another arrive heading or end, or a different order.</p>}
-          {top.map((c, i) => (
+          {top.length === 0 && failed.length > 0 && <p className="bad">None of the {st.plans.length} routes tried fully worked. The closest are below, with what goes wrong.</p>}
+          {(top.length ? top : failed.slice().sort((a, b) => a.problems.length - b.problems.length || a.duration - b.duration).slice(0, 3)).map((c, i) => (
             <div className="card" key={i}>
-              <div className="row two"><b>#{i + 1} · {c.duration.toFixed(2)} s</b><button className="primary" onClick={() => st.applyPlan(c)}>Use this</button></div>
-              <p className="note">{c.style} · {c.routine.steps.length} steps · score R {c.recording.world ? "" : ""}{st.scoreOf(c)}</p>
+              <div className="row two"><b>#{i + 1} · {c.duration.toFixed(2)} s{c.ok ? "" : " (needs a fix)"}</b><button className={c.ok ? "primary" : ""} onClick={() => st.applyPlan(c)}>Use this</button></div>
+              <p className="note">{c.style} · {c.routine.steps.length} steps · your score {st.scoreOf(c)}</p>
+              {c.problems.slice(0, 3).map((p, k) => <p key={k} className="warn">⚠ {p}</p>)}
             </div>
           ))}
         </>

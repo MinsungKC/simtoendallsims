@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motorBudget } from "../core/motors";
-import { WHEEL_CATALOG, chassisRects, derive, type RobotConfig, type WheelType } from "../core/robot";
+import { WHEEL_CATALOG, chassisRects, derive, scoreSpecOf, type RobotConfig, type WheelType } from "../core/robot";
 import { autoTune, suggestHorizontalDrift } from "../core/tune";
 import { Badge, Check, Num, Sel, Section } from "./atoms";
 import { PRESETS } from "./presets";
@@ -138,7 +138,17 @@ export function RobotPanel() {
             <Sel label="Picks up" value={robot.rearIntake.standingOnly ? "standing" : "any"} options={[{ value: "standing", label: "Standing pieces only" }, { value: "any", label: "Any orientation (standing or lying)" }]} onChange={(v) => setRobot({ rearIntake: { ...robot.rearIntake!, standingOnly: v === "standing" } })} />
           </>
         )}
-        <Sel label="Scores from the" value={robot.scoreSide ?? "front"} options={[{ value: "front", label: "Front" }, { value: "back", label: "Back" }]} onChange={(v) => setRobot({ scoreSide: v })} hint="The Place action reaches out of this end of the robot. Drive so that end faces the goal." />
+        <p className="note">Each pickup zone can sit <b>inside</b> the frame (for a mechanism in a cutout): "Inset" is how far past the edge it starts. Sideways offset: + = right.</p>
+        {robot.intake && <><Num label="Front inset" value={robot.intake.inset ?? 0} onChange={(v) => setRobot({ intake: { ...robot.intake!, inset: v } })} unit="in" min={0} step={0.5} /><Num label="Front sideways" value={robot.intake.x ?? 0} onChange={(v) => setRobot({ intake: { ...robot.intake!, x: v } })} unit="in" step={0.5} /></>}
+        {robot.rearIntake && <><Num label="Back inset" value={robot.rearIntake.inset ?? 0} onChange={(v) => setRobot({ rearIntake: { ...robot.rearIntake!, inset: v } })} unit="in" min={0} step={0.5} /><Num label="Back sideways" value={robot.rearIntake.x ?? 0} onChange={(v) => setRobot({ rearIntake: { ...robot.rearIntake!, x: v } })} unit="in" step={0.5} /></>}
+        {(() => { const sc = scoreSpecOf(robot); const upd = (patch: Partial<typeof sc>) => setRobot({ scoring: { ...sc, ...patch } }); return (
+          <>
+            <Sel label="Scores from the" value={sc.side} options={[{ value: "front", label: "Front" }, { value: "back", label: "Back" }]} onChange={(v) => upd({ side: v })} hint="The Place action reaches out of this end of the robot. Drive so that end faces the goal." />
+            <Num label="Score point inset" value={sc.inset ?? 0} onChange={(v) => upd({ inset: v })} unit="in" min={0} step={0.5} hint="How far inside the frame the scoring mechanism sits. With a goal-aligner cutout, set this to the cutout depth so the goal reaches into the chassis." />
+            <Num label="Score point sideways" value={sc.x ?? 0} onChange={(v) => upd({ x: v })} unit="in" step={0.5} />
+            <Num label="Score reach" value={sc.reach ?? 11} onChange={(v) => upd({ reach: v })} unit="in" min={1} step={0.5} hint="How far from the score point a Goal's center may be." />
+          </>
+        ); })()}
       </Section>
 
       <Section title="Sensors & odometry" open={false}>
