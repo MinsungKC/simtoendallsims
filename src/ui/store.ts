@@ -8,7 +8,7 @@ import { worldInit, type CustomField, type GameModule } from "../games/types";
 import { defaultPorts, type Ports, type TargetId } from "../codegen";
 import type { CodeFrame } from "../core/frame";
 
-export type Tool = "select" | "moveToPoint" | "moveToPose" | "turnToPoint" | "follow" | "objects";
+export type Tool = "select" | "draw" | "moveToPoint" | "moveToPose" | "turnToPoint" | "follow" | "objects";
 export type Tab = "robot" | "routine" | "code" | "field";
 
 interface Snapshot { robot: RobotConfig; ports: Ports; routine: Routine }

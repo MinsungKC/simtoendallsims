@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { fitStroke, smoothStroke } from "../core/fit";
 import { forwardOf, rightOf } from "../core/geometry";
 import { planPoses } from "../core/common-plan";
-import { samplePath } from "../core/path";
+import { pathLength, samplePath } from "../core/path";
 import type { PathSpec } from "../core/routine";
 import { defaultMotion } from "../core/routine";
 import { obstaclePoly } from "../core/world";
@@ -35,8 +36,10 @@ export function FieldCanvas() {
   const wrap = useRef<HTMLDivElement>(null);
   const handles = useRef<Handle[]>([]);
   const drag = useRef<Handle | null>(null);
+  const stroke = useRef<{ x: number; y: number }[] | null>(null);
   const sizeRef = useRef(720);
 
+  const [bumpKey, setBumpKey] = useState(0);
   const store = useStore();
   const { recording, time, routine, robot, selected, tool, customField } = store;
   const game = store.game();
@@ -191,6 +194,30 @@ export function FieldCanvas() {
       ctx.stroke();
     }
 
+    // predicted footprint: the robot's outline every ~10 in along the simulated path
+    if (frames && frames.length > 1) {
+      ctx.save(); ctx.strokeStyle = "rgba(240,179,74,0.35)"; ctx.lineWidth = 1;
+      let acc = 1e9, px0 = frames[0].x, py0 = frames[0].y;
+      for (const f of frames) {
+        acc += Math.hypot(f.x - px0, f.y - py0); px0 = f.x; py0 = f.y;
+        if (acc < 10) continue;
+        acc = 0;
+        ctx.save(); ctx.translate(px(f.x), py(f.y)); ctx.rotate((f.heading * Math.PI) / 180);
+        for (const c of chassisRects(robot)) ctx.strokeRect((c.cx - c.w / 2) * S, -(c.cy + c.h / 2) * S, c.w * S, c.h * S);
+        ctx.restore();
+      }
+      ctx.restore();
+    }
+    // live freehand stroke: raw ink and the smoothed curve it will become
+    const ink = stroke.current;
+    if (ink && ink.length > 1) {
+      ctx.strokeStyle = "rgba(255,255,255,0.35)"; ctx.lineWidth = 1.5; ctx.beginPath();
+      ink.forEach((q, i) => (i ? ctx.lineTo(px(q.x), py(q.y)) : ctx.moveTo(px(q.x), py(q.y)))); ctx.stroke();
+      const sm = samplePath({ segments: fitStroke(ink), maxSpeed: 0, minSpeed: 0, decel: 0, spacing: 1 });
+      ctx.strokeStyle = "#f0b34a"; ctx.lineWidth = 3; ctx.beginPath();
+      sm.forEach((q, i) => (i ? ctx.lineTo(px(q.x), py(q.y)) : ctx.moveTo(px(q.x), py(q.y)))); ctx.stroke();
+    }
+
     // robot
     const drawBody = (x: number, y: number, heading: number, dashed: boolean, alpha: number) => {
       ctx.save(); ctx.translate(px(x), py(y)); ctx.rotate((heading * Math.PI) / 180);
@@ -252,7 +279,7 @@ export function FieldCanvas() {
     if (tool === "objects") world.objects.forEach((o) => handles.current.push({ kind: "object", id: String(o.id), x: o.x, y: o.y, r: Math.max(6, o.r * S) }));
 
     void rightOf; void C;
-  }, [recording, time, routine, robot, selected, tool, world, planned, fieldSize]);
+  }, [recording, time, routine, robot, selected, tool, world, planned, fieldSize, bumpKey]);
 
   useEffect(() => { draw(); }, [draw]);
 
@@ -300,6 +327,7 @@ export function FieldCanvas() {
       return;
     }
     if (st.tool === "select" || st.tool === "objects") { st.select(null); return; }
+    if (st.tool === "draw") { stroke.current = [{ x: p.x, y: p.y }]; return; }
     // add-step tools
     const last = planPoses(st.routine, st.robot).after.at(-1) ?? { ...st.routine.start };
     const pos = { x: snap(p.x), y: snap(p.y) };
@@ -320,6 +348,12 @@ export function FieldCanvas() {
   };
 
   const onMove = (e: React.PointerEvent) => {
+    if (stroke.current) {
+      const p = toWorld(e);
+      const last = stroke.current[stroke.current.length - 1];
+      if (Math.hypot(p.x - last.x, p.y - last.y) > 0.4) { stroke.current.push({ x: Math.max(-fieldSize / 2, Math.min(fieldSize / 2, p.x)), y: Math.max(-fieldSize / 2, Math.min(fieldSize / 2, p.y)) }); setBumpKey((k) => k + 1); }
+      return;
+    }
     const h = drag.current;
     if (!h) return;
     const p = toWorld(e);
@@ -353,7 +387,25 @@ export function FieldCanvas() {
     h.x = x; h.y = y;
   };
 
-  const onUp = () => { drag.current = null; };
+  const onUp = () => {
+    drag.current = null;
+    const ink = stroke.current;
+    stroke.current = null;
+    setBumpKey((k) => k + 1);
+    if (!ink || ink.length < 3) return;
+    const st = useStore.getState();
+    const last = planPoses(st.routine, st.robot).after.at(-1) ?? { ...st.routine.start };
+    // start the curve where the robot will be, so the route stays continuous
+    const pts = [{ x: last.x, y: last.y }, ...ink];
+    if (smoothStroke(pts).length < 3) return;
+    const segments = fitStroke(pts);
+    if (!segments.length) return;
+    const m = defaultMotion("follow", { x: last.x, y: last.y, heading: last.heading });
+    if (m.type !== "follow") return;
+    m.path.segments = segments.map((sg) => ({ p: sg.p.map((q) => ({ x: Math.round(q.x * 100) / 100, y: Math.round(q.y * 100) / 100 })) as typeof sg.p }));
+    m.timeout = Math.max(2000, Math.ceil(((pathLength(m.path) / 35) * 1000 + 1000) / 100) * 100); // a drawn route can be long: give it time
+    st.select(st.addStep(m));
+  };
 
   return (
     <div className="field-wrap" ref={wrap}>

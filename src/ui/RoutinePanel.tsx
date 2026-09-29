@@ -17,7 +17,8 @@ const ACTION_LABEL: Record<ActionType, string> = {
 
 export const TOOLS: { id: Tool; label: string; hint: string }[] = [
   { id: "moveToPoint", label: "Drive to", hint: "Click the field to add a drive-to point" },
-  { id: "follow", label: "Curve", hint: "Click the field to add a smooth curved path" },
+  { id: "draw", label: "✎ Draw path", hint: "Hold and drag on the field to draw any curve freehand; it is smoothed automatically and the robot's predicted path appears" },
+  { id: "follow", label: "Curve (click)", hint: "Click the field to add a smooth curved path" },
   { id: "moveToPose", label: "Drive + end facing", hint: "Click the field to drive there and end at a set heading (boomerang)" },
   { id: "turnToPoint", label: "Face a spot", hint: "Click the field to turn the robot toward that spot" },
   { id: "select", label: "Just select", hint: "Clicking the field adds nothing; drag handles to edit" },

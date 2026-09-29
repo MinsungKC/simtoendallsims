@@ -32,7 +32,7 @@ function Guide({ steps }: { steps: number }) {
     <div className="guide">
       <ol>
         <li><b>Pick your game</b> at the top and your robot on the Robot tab.</li>
-        <li><b>Click the field</b> where the robot should drive. Each click adds a step; drag the dots to adjust.</li>
+        <li><b>Click the field</b> to add a drive point, or pick <b>✎ Draw path</b> and drag to draw any curve freehand - it is smoothed for you.</li>
         <li>Press <b>Play</b> to watch it, then <b>Get code ▸</b> for your robot's program.</li>
       </ol>
       <button title="Hide" onClick={() => { setGone(true); try { localStorage.setItem("simtoendallsims:guide", "1"); } catch { /* ignore */ } }}>✕</button>
