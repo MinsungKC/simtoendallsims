@@ -15,18 +15,18 @@ const ACTION_LABEL: Record<ActionType, string> = {
   intakeIn: "Intake in", intakeOut: "Intake out", intakeStop: "Intake stop", clamp: "Clamp", unclamp: "Unclamp", eject: "Eject", place: "Place held object on Goal", toggleSet: "Set Toggle", custom: "Custom code",
 };
 
-const TOOLS: { id: Tool; label: string; hint: string }[] = [
-  { id: "select", label: "Select", hint: "Drag handles on the field" },
-  { id: "moveToPoint", label: "+ Point", hint: "Click the field to add a move-to-point" },
-  { id: "moveToPose", label: "+ Pose", hint: "Click the field to add a move-to-pose" },
-  { id: "follow", label: "+ Path", hint: "Click the field to add a curved path" },
-  { id: "turnToPoint", label: "+ Face", hint: "Click the field to add a turn-to-point" },
-  { id: "objects", label: "Edit field", hint: "Drag game objects to change the layout" },
+export const TOOLS: { id: Tool; label: string; hint: string }[] = [
+  { id: "moveToPoint", label: "Drive to", hint: "Click the field to add a drive-to point" },
+  { id: "follow", label: "Curve", hint: "Click the field to add a smooth curved path" },
+  { id: "moveToPose", label: "Drive + end facing", hint: "Click the field to drive there and end at a set heading (boomerang)" },
+  { id: "turnToPoint", label: "Face a spot", hint: "Click the field to turn the robot toward that spot" },
+  { id: "select", label: "Just select", hint: "Clicking the field adds nothing; drag handles to edit" },
+  { id: "objects", label: "Move game pieces", hint: "Drag game objects to change the layout" },
 ];
 
 export function RoutinePanel() {
   const st = useEditor();
-  const { routine, robot, selected, select, tool, setTool } = st;
+  const { routine, robot, selected, select } = st;
   const game = st.game();
   const planned = planPoses(routine, robot);
   const step = routine.steps.find((s) => s.id === selected) ?? null;
@@ -40,49 +40,28 @@ export function RoutinePanel() {
 
   return (
     <div className="panel-body">
-      <Section title="Routine">
-        <div className="row">
-          <select className="wide" value={st.active} onChange={(e) => st.switchRoutine(parseInt(e.target.value, 10))} title="Routines in this project">
-            {st.allRoutines().map((r, i) => <option key={i} value={i}>{r.name || `Auton ${i + 1}`} ({r.alliance})</option>)}
-          </select>
-        </div>
-        <div className="btns" style={{ marginTop: 0, marginBottom: 6 }}>
-          <button onClick={st.newRoutine}>+ New</button>
-          <button onClick={st.duplicateRoutine}>Duplicate</button>
-          <button onClick={st.deleteRoutine} disabled={st.routines.length <= 1}>Delete</button>
-        </div>
-        <label className="row"><span>Name</span><input value={routine.name} onChange={(e) => st.setRoutine({ name: e.target.value }, { history: false })} /></label>
-        <Sel label="Alliance" value={routine.alliance} options={[{ value: "red", label: "Red" }, { value: "blue", label: "Blue" }]} onChange={(v) => st.setRoutine({ alliance: v })} />
+      <Section title="Start">
         <label className="row">
-          <span>Start position</span>
+          <span>Robot starts</span>
           <select value="" onChange={(e) => { const p = game.starts.find((x) => x.label === e.target.value); if (p) st.setRoutine({ start: { x: p.x, y: p.y, heading: p.heading }, alliance: p.alliance }); }}>
-            <option value="">Preset…</option>
+            <option value="">{routine.alliance === "red" ? "Red" : "Blue"} · ({fmt(routine.start.x)}, {fmt(routine.start.y)}) facing {fmt(routine.start.heading, 0)}° - pick a preset…</option>
             {game.starts.map((p) => <option key={p.label} value={p.label}>{p.label}</option>)}
           </select>
         </label>
-        <Num label="Start X" value={routine.start.x} onChange={(x) => st.setRoutine({ start: { ...routine.start, x } })} step={0.5} unit="in" />
-        <Num label="Start Y" value={routine.start.y} onChange={(y) => st.setRoutine({ start: { ...routine.start, y } })} step={0.5} unit="in" />
-        <Num label="Start heading" value={routine.start.heading} onChange={(heading) => st.setRoutine({ start: { ...routine.start, heading } })} step={1} unit="°" />
+        <p className="note">Or drag the green <b>S</b> on the field to place the robot, and the small dot to turn it.</p>
         <div className="btns">
-          <button onClick={st.mirror} title={st.game().mirror === "rotate" ? "Turn the whole routine 180° about the field center (this field's red and blue sides swap under a rotation)" : "Flip the whole routine across the field's center line"}>{st.game().mirror === "rotate" ? "Other alliance ↻ (rotate 180°)" : "Mirror ↔ (red/blue)"}</button>
-          <button onClick={st.clearRoutine}>Clear steps</button>
+          <button onClick={st.mirror} title={st.game().mirror === "rotate" ? "Turn the whole routine 180° about the field center (this field's red and blue sides swap under a rotation)" : "Flip the whole routine across the field's center line"}>{st.game().mirror === "rotate" ? "Copy to other alliance ↻" : "Mirror to other alliance ↔"}</button>
+          <button onClick={st.clearRoutine} disabled={!routine.steps.length}>Clear all steps</button>
         </div>
-      </Section>
-
-      <Section title="Tools">
-        <div className="tools">
-          {TOOLS.map((t) => <button key={t.id} className={tool === t.id ? "active" : ""} title={t.hint} onClick={() => setTool(t.id)}>{t.label}</button>)}
-        </div>
-        <p className="note">{TOOLS.find((t) => t.id === tool)?.hint}. Drag the green S to move the start; drag the small dot to set a heading.</p>
       </Section>
 
       <Section title={`Steps (${routine.steps.length})`} right={
         <select value="" onChange={(e) => { if (e.target.value) addByType(e.target.value as MotionSpec["type"]); }}>
-          <option value="">+ Add…</option>
+          <option value="">+ Other step…</option>
           {(Object.keys(MOTION_LABEL) as MotionSpec["type"][]).map((t) => <option key={t} value={t}>{MOTION_LABEL[t]}</option>)}
         </select>
       }>
-        {routine.steps.length === 0 && <p className="note">No steps yet. Pick a tool and click the field, or use “+ Add…”.</p>}
+        {routine.steps.length === 0 && <p className="note">No steps yet. Just click the field where the robot should drive.</p>}
         <ol className="steps">
           {routine.steps.map((s, i) => {
             const t = st.recording?.steps.find((x) => x.index === i);
@@ -92,6 +71,7 @@ export function RoutinePanel() {
                 <span className="lbl">{describeMotion(s.motion)}</span>
                 {s.actions.length > 0 && <span className="chip">{s.actions.length} action{s.actions.length > 1 ? "s" : ""}</span>}
                 {t && <span className={`time ${t.timedOut ? "bad" : ""}`}>{(t.end - t.start).toFixed(2)}s{t.timedOut ? " ⚠" : ""}</span>}
+                <button className="x" title="Delete step" onClick={(e) => { e.stopPropagation(); st.removeStep(s.id); }}>✕</button>
               </li>
             );
           })}
@@ -111,6 +91,23 @@ export function RoutinePanel() {
           <ActionsEditor step={step} />
         </Section>
       )}
+      <Section title="More: routines, exact start, name" open={false}>
+        <div className="row">
+          <select className="wide" value={st.active} onChange={(e) => st.switchRoutine(parseInt(e.target.value, 10))} title="Routines in this project">
+            {st.allRoutines().map((r, i) => <option key={i} value={i}>{r.name || `Auton ${i + 1}`} ({r.alliance})</option>)}
+          </select>
+        </div>
+        <div className="btns" style={{ marginTop: 0, marginBottom: 6 }}>
+          <button onClick={st.newRoutine}>+ New routine</button>
+          <button onClick={st.duplicateRoutine}>Duplicate</button>
+          <button onClick={st.deleteRoutine} disabled={st.routines.length <= 1}>Delete</button>
+        </div>
+        <label className="row"><span>Name</span><input value={routine.name} onChange={(e) => st.setRoutine({ name: e.target.value }, { history: false })} /></label>
+        <Sel label="Alliance" value={routine.alliance} options={[{ value: "red", label: "Red" }, { value: "blue", label: "Blue" }]} onChange={(v) => st.setRoutine({ alliance: v })} />
+        <Num label="Start X" value={routine.start.x} onChange={(x) => st.setRoutine({ start: { ...routine.start, x } })} step={0.5} unit="in" />
+        <Num label="Start Y" value={routine.start.y} onChange={(y) => st.setRoutine({ start: { ...routine.start, y } })} step={0.5} unit="in" />
+        <Num label="Start heading" value={routine.start.heading} onChange={(heading) => st.setRoutine({ start: { ...routine.start, heading } })} step={1} unit="°" />
+      </Section>
     </div>
   );
 }
@@ -121,12 +118,14 @@ function MotionEditor({ step, before }: { step: Step; before: { x: number; y: nu
   const up = (patch: Partial<MotionSpec>) => st.updateMotion(step.id, patch);
   const common = (m: Extract<MotionSpec, { maxSpeed: number }>) => (
     <>
-      <Num label="Max speed" value={m.maxSpeed} onChange={(v) => up({ maxSpeed: v } as never)} min={1} max={127} hint="0-127 (PROS move units)" />
-      <Num label="Min speed" value={m.minSpeed} onChange={(v) => up({ minSpeed: v } as never)} min={0} max={127} hint="Non-zero = don't slow down; use with early exit to chain motions." />
-      <Num label="Early exit range" value={m.earlyExit} onChange={(v) => up({ earlyExit: v } as never)} min={0} step={0.5} hint="Exit this far from the target (only used with min speed)." />
+      <Num label="Speed" value={m.maxSpeed} onChange={(v) => up({ maxSpeed: v } as never)} min={1} max={127} hint="0-127 (PROS move units)" />
+      <details className="adv"><summary>Advanced</summary>
+        <Num label="Min speed" value={m.minSpeed} onChange={(v) => up({ minSpeed: v } as never)} min={0} max={127} hint="Non-zero = don't slow down; use with early exit to chain motions." />
+        <Num label="Early exit range" value={m.earlyExit} onChange={(v) => up({ earlyExit: v } as never)} min={0} step={0.5} hint="Exit this far from the target (only used with min speed)." />
+      </details>
     </>
   );
-  const timeout = (m: { timeout: number }) => <Num label="Timeout" value={m.timeout} onChange={(v) => up({ timeout: v } as never)} step={100} min={100} unit="ms" />;
+  const timeout = (m: { timeout: number }) => <details className="adv"><summary>Timeout</summary><Num label="Timeout" value={m.timeout} onChange={(v) => up({ timeout: v } as never)} step={100} min={100} unit="ms" /></details>;
   switch (m.type) {
     case "setPose":
       return <>
@@ -206,8 +205,22 @@ function ActionsEditor({ step }: { step: Step }) {
   const hasIntake = !!st.robot.intake;
   const add = (type: ActionType) => st.addAction(step.id, { id: uid("a"), type, when: { kind: "start" }, code: type === "custom" ? "// your code here" : undefined });
   const isTurn = step.motion.type === "turnToHeading" || step.motion.type === "turnToPoint" || step.motion.type === "swingToHeading";
+  const quick: { label: string; type: ActionType; when: Trigger; arg?: string; show: boolean }[] = [
+    { label: "Intake on", type: "intakeIn", when: { kind: "start" }, show: hasIntake },
+    { label: "Intake off", type: "intakeStop", when: { kind: "end" }, show: hasIntake },
+    { label: "Clamp", type: "clamp", when: { kind: "end" }, show: true },
+    { label: "Release", type: "unclamp", when: { kind: "end" }, show: true },
+    { label: "Place on goal", type: "place", when: { kind: "end" }, show: !!st.game().goals?.length },
+    { label: "Flip toggle", type: "toggleSet", when: { kind: "end" }, arg: st.routine.alliance, show: !!st.game().toggles?.length },
+  ];
   return (
     <div className="actions">
+      <h4>Do something here</h4>
+      <div className="chips">
+        {quick.filter((q) => q.show).map((q) => <button key={q.label} onClick={() => st.addAction(step.id, { id: uid("a"), type: q.type, when: q.when, arg: q.arg })}>{q.label}</button>)}
+      </div>
+      {step.actions.length > 0 && <ul className="done">{step.actions.map((a) => <li key={a.id}>{ACTION_LABEL[a.type]}{a.type === "toggleSet" ? ` → ${a.arg ?? "red"}` : ""} <i>{a.when.kind === "start" ? "at start" : a.when.kind === "end" ? "when done" : a.when.kind === "distance" ? `after ${a.when.value}` : `after ${a.when.ms} ms`}</i><button className="x" onClick={() => st.removeAction(step.id, a.id)}>✕</button></li>)}</ul>}
+      <details className="adv"><summary>Edit timing / custom code</summary>
       <h4>Actions <select value="" onChange={(e) => { if (e.target.value) add(e.target.value as ActionType); }}>
         <option value="">+ Add action…</option>
         {(Object.keys(ACTION_LABEL) as ActionType[]).map((t) => <option key={t} value={t}>{ACTION_LABEL[t]}</option>)}
@@ -228,6 +241,7 @@ function ActionsEditor({ step }: { step: Step }) {
           {(a.type === "intakeIn" || a.type === "intakeOut" || a.type === "intakeStop" || a.type === "eject") && !hasIntake && <p className="bad">No intake configured on the robot.</p>}
         </div>
       ))}
+      </details>
     </div>
   );
 }

@@ -95,3 +95,20 @@ pre.code { background: var(--code-bg); border: 1px solid var(--line); border-rad
   .side { max-height: none; }
   .panel-body { max-height: 70vh; }
 }
+
+/* simpler flow */
+button.primary { background: var(--accent, #3b82f6); color: #fff; border-color: transparent; font-weight: 600; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.toolbar .sep { width: 1px; height: 22px; background: var(--border, #8884); margin: 0 4px; }
+.toolbar button.active { outline: 2px solid var(--accent, #3b82f6); }
+.guide { display: flex; align-items: flex-start; gap: 10px; padding: 8px 12px; border-radius: 10px; background: color-mix(in srgb, var(--accent, #3b82f6) 14%, transparent); font-size: 13px; }
+.guide ol { margin: 0; padding-left: 18px; flex: 1; }
+.guide button { border: 0; background: transparent; cursor: pointer; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.done { list-style: none; margin: 0 0 6px; padding: 0; font-size: 12px; }
+.done li { display: flex; gap: 6px; align-items: center; padding: 2px 0; }
+.done i { opacity: .65; }
+button.x { margin-left: auto; border: 0; background: transparent; cursor: pointer; opacity: .6; }
+details.adv { margin: 4px 0; }
+details.adv > summary { cursor: pointer; font-size: 12px; opacity: .8; }
+.steps li .x { margin-left: 6px; }

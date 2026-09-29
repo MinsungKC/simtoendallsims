@@ -220,7 +220,7 @@ export const useStore = create<Store>((set, get) => {
   return {
     ...init,
     selected: null,
-    tool: "select",
+    tool: "moveToPoint",
     tab: "routine",
     recording: null,
     simMs: 0,

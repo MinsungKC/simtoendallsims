@@ -9,20 +9,36 @@ import { Badge } from "./atoms";
 import { download, scoreFor } from "./helpers";
 import { games } from "../games";
 import { preflight } from "../core/preflight";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import { TOOLS } from "./RoutinePanel";
 import { useEditor, useStore, type ProjectFile, type Tab } from "./store";
 
 const TABS: { id: Tab; label: string }[] = [
-  { id: "routine", label: "Routine" },
+  { id: "routine", label: "Route" },
   { id: "robot", label: "Robot" },
   { id: "code", label: "Code" },
-  { id: "field", label: "Field" },
+  { id: "field", label: "Game info" },
 ];
 
 try {
   const saved = localStorage.getItem("simtoendallsims:theme");
   if (saved) document.documentElement.dataset.theme = saved;
 } catch { /* storage unavailable */ }
+
+function Guide({ steps }: { steps: number }) {
+  const [gone, setGone] = useState(() => { try { return localStorage.getItem("simtoendallsims:guide") === "1"; } catch { return false; } });
+  if (gone || steps >= 2) return null;
+  return (
+    <div className="guide">
+      <ol>
+        <li><b>Pick your game</b> at the top and your robot on the Robot tab.</li>
+        <li><b>Click the field</b> where the robot should drive. Each click adds a step; drag the dots to adjust.</li>
+        <li>Press <b>Play</b> to watch it, then <b>Get code ▸</b> for your robot's program.</li>
+      </ol>
+      <button title="Hide" onClick={() => { setGone(true); try { localStorage.setItem("simtoendallsims:guide", "1"); } catch { /* ignore */ } }}>✕</button>
+    </div>
+  );
+}
 
 export function App() {
   const st = useEditor();
@@ -60,7 +76,7 @@ export function App() {
       else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") { e.preventDefault(); s.redo(); }
       else if ((e.key === "Delete" || e.key === "Backspace") && s.selected) { e.preventDefault(); s.removeStep(s.selected); }
       else if (e.key === " ") { e.preventDefault(); s.setPlaying(!s.playing); }
-      else if (e.key === "Escape") { s.select(null); s.setTool("select"); }
+      else if (e.key === "Escape") { s.select(null); s.setTool("moveToPoint"); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -115,6 +131,7 @@ export function App() {
         <button onClick={st.redo} disabled={!st.future.length} title="Redo (Ctrl+Shift+Z)">↷</button>
         <button onClick={save}>Save</button>
         <button onClick={() => fileRef.current?.click()}>Open</button>
+        <button className="primary" onClick={() => setTab("code")} title="Generate the robot code for this route">Get code ▸</button>
         <input ref={fileRef} type="file" accept=".json,application/json" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) void load(f); e.target.value = ""; }} />
       </header>
 
@@ -129,6 +146,12 @@ export function App() {
       </aside>
 
       <main className="center">
+        <div className="toolbar">
+          <button className="primary" onClick={() => { const g = useStore.getState(); if (!g.playing && g.recording && g.time >= g.recording.duration - 0.01) g.setTime(0); g.setPlaying(!g.playing); }} title="Play / pause (Space)">{playing ? "❚❚ Pause" : "▶ Play"}</button>
+          <span className="sep" />
+          {TOOLS.map((t) => <button key={t.id} className={st.tool === t.id ? "active" : ""} title={t.hint} onClick={() => st.setTool(t.id)}>{t.label}</button>)}
+        </div>
+        <Guide steps={routine.steps.length} />
         <FieldCanvas />
         <div className="legend">
           <span><i style={{ background: "#f0b34a" }} /> true path</span>

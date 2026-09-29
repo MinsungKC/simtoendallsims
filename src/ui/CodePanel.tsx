@@ -32,16 +32,22 @@ export function CodePanel() {
 
   return (
     <div className="panel-body">
-      <Section title="Target library">
+      <Section title="1. Pick your library">
         <div className="targets">
           {TARGETS.map((t) => (
             <button key={t.id} className={target === t.id ? "active" : ""} onClick={() => { setTarget(t.id); setFileIdx(0); }} title={t.blurb}>{t.label}</button>
           ))}
         </div>
-        <p className="note">{TARGETS.find((t) => t.id === target)?.blurb}</p>
+        <p className="note">{TARGETS.find((t) => t.id === target)?.blurb} Not sure? Choose LemLib.</p>
+        {!("error" in result) && (
+          <div className="btns">
+            <button className="primary" onClick={() => download(`${routine.name.replace(/\W+/g, "_") || "auton"}_${result.target}.zip`, makeZip(result.files).buffer as ArrayBuffer, "application/zip")}>2. Download project (.zip)</button>
+            <button onClick={() => { const f = result.files[Math.min(fileIdx, result.files.length - 1)]; void navigator.clipboard?.writeText(f.content).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); }); }}>{copied ? "Copied ✓" : "Copy shown file"}</button>
+          </div>
+        )}
       </Section>
 
-      <Section title="Coordinates in the code">
+      <Section title="Coordinates in the code" open={false}>
         <div className="targets">
           {CODE_FRAMES.map((f) => (
             <button key={f.id} className={codeFrame === f.id ? "active" : ""} onClick={() => setCodeFrame(f.id)} title={f.hint}>{f.label}</button>
@@ -79,7 +85,7 @@ export function CodePanel() {
         <p className="bad">Code generation failed: {result.error}</p>
       ) : (
         <>
-          <Section title="Notes & warnings" right={<Badge kind={result.warnings.length ? "warn" : "ok"}>{result.warnings.length} warning{result.warnings.length === 1 ? "" : "s"}</Badge>}>
+          <Section title="Notes & warnings" open={false} right={<Badge kind={result.warnings.length ? "warn" : "ok"}>{result.warnings.length} warning{result.warnings.length === 1 ? "" : "s"}</Badge>}>
             <p className="note"><b>{result.title}</b> — {result.version}</p>
             <p className="note ok">✔ {VERIFY[result.target]}</p>
             {result.warnings.map((w, i) => <p key={i} className="warn">⚠ {w}</p>)}
