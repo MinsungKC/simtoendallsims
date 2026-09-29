@@ -63,3 +63,11 @@ opposing side, touching an opposing Alliance Goal, exceeding the 24" expansion l
 - Goal stacks have no height limit besides `maxStack` on the robot (default unlimited).
 - Match Loads / Loaders, the opposing Alliance, Endgame rules (SG12) and Load Zone protection (SG13, driver period only) are not simulated.
 - Yellow-Pin ownership in the center Goal only considers your own Robot.
+
+## Pen routes, pickup sides and scoring side
+- **Pen (✎ Draw path):** draw a rough line; it is smoothed, pushed out of Goals/Loaders/walls (keeping the robot's half-width + 1" clear),
+  reduced to a few waypoints and added as boomerang steps whose headings follow the line (adjust with the arrow handles). Choose
+  whether the robot leads with its front or back. Loose game pieces are not avoided (you may want to run into them).
+- **Pickup (Robot tab → Pickup & scoring):** a front zone and an optional rear zone, each with reach, width, capacity and
+  "any orientation" or "standing pieces only" (a rear roller that can't take a lying Pin). Actions: Front/Rear intake on/off.
+- **Scoring side:** the Place action reaches out of the front or back; drive so that end faces the Goal.

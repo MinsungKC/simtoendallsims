@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { fitStroke, smoothStroke } from "../core/fit";
+import { fitStroke } from "../core/fit";
+import { routeFromStroke, avoidObstacles } from "../core/autoroute";
 import { forwardOf, rightOf } from "../core/geometry";
 import { planPoses } from "../core/common-plan";
-import { pathLength, samplePath } from "../core/path";
+import { samplePath } from "../core/path";
 import type { PathSpec } from "../core/routine";
 import { defaultMotion } from "../core/routine";
 import { obstaclePoly } from "../core/world";
@@ -213,7 +214,8 @@ export function FieldCanvas() {
     if (ink && ink.length > 1) {
       ctx.strokeStyle = "rgba(255,255,255,0.35)"; ctx.lineWidth = 1.5; ctx.beginPath();
       ink.forEach((q, i) => (i ? ctx.lineTo(px(q.x), py(q.y)) : ctx.moveTo(px(q.x), py(q.y)))); ctx.stroke();
-      const sm = samplePath({ segments: fitStroke(ink), maxSpeed: 0, minSpeed: 0, decel: 0, spacing: 1 });
+      const g0 = useStore.getState().game();
+      const sm = samplePath({ segments: fitStroke(avoidObstacles(ink, { obstacles: useStore.getState().customField?.obstacles ?? g0.obstacles, fieldSize, clearance: robot.width / 2 + 1 })), maxSpeed: 0, minSpeed: 0, decel: 0, spacing: 1 });
       ctx.strokeStyle = "#f0b34a"; ctx.lineWidth = 3; ctx.beginPath();
       sm.forEach((q, i) => (i ? ctx.lineTo(px(q.x), py(q.y)) : ctx.moveTo(px(q.x), py(q.y)))); ctx.stroke();
     }
@@ -228,6 +230,7 @@ export function FieldCanvas() {
         ctx.fillStyle = "rgba(80,150,255,0.5)"; ctx.strokeStyle = "#8ec1ff"; ctx.lineWidth = 2;
         for (const c of chassisRects(robot)) { ctx.fillRect((c.cx - c.w / 2) * S, -(c.cy + c.h / 2) * S, c.w * S, c.h * S); ctx.strokeRect((c.cx - c.w / 2) * S, -(c.cy + c.h / 2) * S, c.w * S, c.h * S); }
         if (robot.intake) { ctx.fillStyle = "rgba(120,220,140,0.25)"; ctx.fillRect(-(robot.intake.width / 2) * S, -l / 2 - robot.intake.reach * S, robot.intake.width * S, robot.intake.reach * S); }
+        if (robot.rearIntake) { ctx.fillStyle = robot.rearIntake.standingOnly ? "rgba(90,200,230,0.25)" : "rgba(120,220,140,0.25)"; ctx.fillRect(-(robot.rearIntake.width / 2) * S, l / 2, robot.rearIntake.width * S, robot.rearIntake.reach * S); }
         for (const wh of robot.wheels) for (const side of [-1, 1]) {
           ctx.fillStyle = wh.type === "omni" ? "#eee" : "#222";
           const wl = robot.wheelDiameter * S;
@@ -395,16 +398,10 @@ export function FieldCanvas() {
     if (!ink || ink.length < 3) return;
     const st = useStore.getState();
     const last = planPoses(st.routine, st.robot).after.at(-1) ?? { ...st.routine.start };
-    // start the curve where the robot will be, so the route stays continuous
-    const pts = [{ x: last.x, y: last.y }, ...ink];
-    if (smoothStroke(pts).length < 3) return;
-    const segments = fitStroke(pts);
-    if (!segments.length) return;
-    const m = defaultMotion("follow", { x: last.x, y: last.y, heading: last.heading });
-    if (m.type !== "follow") return;
-    m.path.segments = segments.map((sg) => ({ p: sg.p.map((q) => ({ x: Math.round(q.x * 100) / 100, y: Math.round(q.y * 100) / 100 })) as typeof sg.p }));
-    m.timeout = Math.max(2000, Math.ceil(((pathLength(m.path) / 35) * 1000 + 1000) / 100) * 100); // a drawn route can be long: give it time
-    st.select(st.addStep(m));
+    const g = st.game();
+    const obstacles = st.customField ? st.customField.obstacles : g.obstacles;
+    const motions = routeFromStroke(ink, { obstacles, fieldSize, clearance: st.robot.width / 2 + 1, reverse: st.drawReverse, from: { x: last.x, y: last.y } });
+    st.addSteps(motions);
   };
 
   return (

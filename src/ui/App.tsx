@@ -150,6 +150,7 @@ export function App() {
           <button className="primary" onClick={() => { const g = useStore.getState(); if (!g.playing && g.recording && g.time >= g.recording.duration - 0.01) g.setTime(0); g.setPlaying(!g.playing); }} title="Play / pause (Space)">{playing ? "❚❚ Pause" : "▶ Play"}</button>
           <span className="sep" />
           {TOOLS.map((t) => <button key={t.id} className={st.tool === t.id ? "active" : ""} title={t.hint} onClick={() => st.setTool(t.id)}>{t.label}</button>)}
+          {st.tool === "draw" && <><span className="sep" /><span className="lbl">Leads with</span><button className={!st.drawReverse ? "active" : ""} onClick={() => st.setDrawReverse(false)}>Front</button><button className={st.drawReverse ? "active" : ""} onClick={() => st.setDrawReverse(true)}>Back</button></>}
         </div>
         <Guide steps={routine.steps.length} />
         <FieldCanvas />

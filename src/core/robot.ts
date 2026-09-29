@@ -87,6 +87,10 @@ export interface RobotConfig {
   efficiency: number;
   /** Intake capture zone in front of the robot (robot frame), inches. null = none */
   intake: IntakeSpec | null;
+  /** Second capture zone on the back of the robot. null/undefined = none. */
+  rearIntake?: IntakeSpec | null;
+  /** Which end of the robot scores (Place action reaches out of it). Default front. */
+  scoreSide?: "front" | "back";
   /** Tallest stack (pieces) the scoring mechanism can add to. Undefined = unlimited. */
   maxStack?: number;
 }
@@ -151,6 +155,8 @@ export interface IntakeSpec {
   width: number;
   /** Max objects held */
   capacity: number;
+  /** Only picks up objects that are standing upright (not lying on their side). Default false = any orientation. */
+  standingOnly?: boolean;
 }
 
 export const IN = 0.0254;

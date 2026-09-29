@@ -60,24 +60,24 @@ function callMotion(m: MotionSpec, pathIdx: number | undefined): string[] {
   }
 }
 
-function stepCode(step: Step, index: number, pathIdx: number | undefined, hasIntake: boolean): string[] {
+function stepCode(step: Step, index: number, pathIdx: number | undefined, hasIntake: boolean, hasRear: boolean): string[] {
   const out: string[] = [`// ${index + 1}. ${describeMotion(step.motion)}`];
   const { start, mid, end } = splitActions(step);
   const isMove = step.motion.type !== "setPose" && step.motion.type !== "wait";
-  for (const a of start) out.push(...actionCpp(a, hasIntake));
+  for (const a of start) out.push(...actionCpp(a, hasIntake, hasRear));
   out.push(...callMotion(step.motion, pathIdx));
   if (isMove) {
     for (const a of mid) {
       const w = a.when;
       if (w.kind === "distance") out.push(`chassis.waitUntil(${num(w.value)}); // ${step.motion.type === "turnToHeading" || step.motion.type === "turnToPoint" || step.motion.type === "swingToHeading" ? "degrees turned" : "inches traveled"}`);
       else if (w.kind === "delay") out.push(`pros::delay(${w.ms});`);
-      out.push(...actionCpp(a, hasIntake));
+      out.push(...actionCpp(a, hasIntake, hasRear));
     }
     out.push("chassis.waitUntilDone();");
   } else {
-    for (const a of mid) out.push(...actionCpp(a, hasIntake));
+    for (const a of mid) out.push(...actionCpp(a, hasIntake, hasRear));
   }
-  for (const a of end) out.push(...actionCpp(a, hasIntake));
+  for (const a of end) out.push(...actionCpp(a, hasIntake, hasRear));
   return out;
 }
 
@@ -86,6 +86,7 @@ export function generateLemLib(input: GenInput): GenResult {
   const d = derive(cfg);
   const fn = input.fnName ?? "autonomous";
   const hasIntake = ports.intake.length > 0;
+  const hasRear = ports.rearIntake.length > 0;
   const usesClamp = routine.steps.some((s) => s.actions.some((a) => a.type === "clamp" || a.type === "unclamp"));
   const paths = pathIndices(routine);
   const warnings: string[] = [];
@@ -108,6 +109,7 @@ export function generateLemLib(input: GenInput): GenResult {
   L.push("// drivetrain motors (negative port = reversed)");
   L.push(`pros::MotorGroup left_motors(${motorList(ports.left)}, pros::MotorGears::${gearName(cfg.cartridge)});`);
   L.push(`pros::MotorGroup right_motors(${motorList(ports.right)}, pros::MotorGears::${gearName(cfg.cartridge)});`);
+  if (hasRear) L.push(`pros::MotorGroup rear_intake(${motorList(ports.rearIntake)}, pros::MotorGears::${gearName(ports.intakeCartridge)});`);
   if (hasIntake) L.push(`pros::MotorGroup intake(${motorList(ports.intake)}, pros::MotorGears::${gearName(ports.intakeCartridge)});`);
   if (usesClamp) L.push(`pros::adi::DigitalOut clamp_piston('${ports.clamp}');`);
   L.push("");
@@ -185,7 +187,7 @@ export function generateLemLib(input: GenInput): GenResult {
   const startStep = routine.steps.length && routine.steps[0].motion.type === "setPose";
   if (!startStep) L.push(...indent([`chassis.setPose(${num(routine.start.x)}, ${num(routine.start.y)}, ${num(routine.start.heading)});`]));
   routine.steps.forEach((s, i) => {
-    L.push(...indent(stepCode(s, i, paths.get(s.id), hasIntake)));
+    L.push(...indent(stepCode(s, i, paths.get(s.id), hasIntake, hasRear)));
   });
   L.push("}");
   L.push("");

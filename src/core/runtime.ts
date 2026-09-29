@@ -139,6 +139,8 @@ export function simulate(routine: Routine, cfg: RobotConfig, init: WorldInit, op
       case "intakeIn": world.mech.intake = 1; break;
       case "intakeOut": world.mech.intake = -1; break;
       case "intakeStop": world.mech.intake = 0; break;
+      case "rearIntakeIn": world.mech.rear = 1; break;
+      case "rearIntakeStop": world.mech.rear = 0; break;
       case "eject": ejectHeld(world, cfg, 1); break;
       case "place": {
         const why = placeHeld(world, cfg, a.arg && a.arg !== "any" ? a.arg : undefined);

@@ -30,6 +30,7 @@ export function generateGeneric(input: GenInput): GenResult {
   const d = derive(cfg);
   const fn = ident(input.fnName ?? "run_auton");
   const hasIntake = ports.intake.length > 0;
+  const hasRear = ports.rearIntake.length > 0;
   const usesClamp = routine.steps.some((s) => s.actions.some((a) => a.type === "clamp" || a.type === "unclamp"));
   const paths = pathIndices(routine);
   const warnings: string[] = [];
@@ -81,6 +82,7 @@ export function generateGeneric(input: GenInput): GenResult {
   L.push("pros::Controller controller(pros::E_CONTROLLER_MASTER);");
   L.push(`pros::MotorGroup left_motors(${motorList(ports.left)}, pros::MotorGears::${gearName(cfg.cartridge)});`);
   L.push(`pros::MotorGroup right_motors(${motorList(ports.right)}, pros::MotorGears::${gearName(cfg.cartridge)});`);
+  if (hasRear) L.push(`pros::MotorGroup rear_intake(${motorList(ports.rearIntake)}, pros::MotorGears::${gearName(ports.intakeCartridge)});`);
   if (hasIntake) L.push(`pros::MotorGroup intake(${motorList(ports.intake)}, pros::MotorGears::${gearName(ports.intakeCartridge)});`);
   if (usesClamp) L.push(`pros::adi::DigitalOut clamp_piston('${ports.clamp}');`);
   L.push(`pros::Imu imu(${ports.imu});`);
@@ -102,7 +104,7 @@ export function generateGeneric(input: GenInput): GenResult {
     const m: MotionSpec = step.motion;
     const out = [`// ${i + 1}. ${describeMotion(m)}`];
     const { start, mid, end } = splitActions(step);
-    for (const a of start) out.push(...actionCpp(a, hasIntake));
+    for (const a of start) out.push(...actionCpp(a, hasIntake, hasRear));
     if (mid.length && m.type !== "setPose" && m.type !== "wait") {
       const body: string[] = [];
       let elapsed = 0;
@@ -110,10 +112,10 @@ export function generateGeneric(input: GenInput): GenResult {
         const t = delayFor(a, i, recording);
         body.push(`pros::delay(${Math.max(0, t - elapsed)}); // ${a.when.kind === "distance" ? `~when the simulated robot had traveled ${num((a.when as { value: number }).value, 1)}` : "delay"} (re-time on robot)`);
         elapsed = Math.max(elapsed, t);
-        body.push(...actionCpp(a, hasIntake));
+        body.push(...actionCpp(a, hasIntake, hasRear));
       }
       out.push(`pros::Task step${i + 1}_actions([]() {`, ...indent(body, 4), "});");
-    } else for (const a of mid) out.push(...actionCpp(a, hasIntake));
+    } else for (const a of mid) out.push(...actionCpp(a, hasIntake, hasRear));
     switch (m.type) {
       case "setPose": out.push(`gen::set_pose(${num(m.x)}, ${num(m.y)}, ${num(m.heading)});`); break;
       case "wait": out.push(`pros::delay(${m.ms});`); break;
@@ -138,7 +140,7 @@ export function generateGeneric(input: GenInput): GenResult {
         break;
       }
     }
-    for (const a of end) out.push(...actionCpp(a, hasIntake));
+    for (const a of end) out.push(...actionCpp(a, hasIntake, hasRear));
     return out;
   };
 

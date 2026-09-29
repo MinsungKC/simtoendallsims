@@ -41,6 +41,7 @@ export function preflight(routine: Routine, cfg: RobotConfig, game: GameModule, 
     if ("minSpeed" in m && m.minSpeed > 0 && m.earlyExit === 0) out.push({ level: "warn", text: "minSpeed > 0 with no earlyExit range: the motion can only end by timeout", step: i });
     if ("timeout" in m && m.timeout < 300) out.push({ level: "warn", text: "Very short timeout", step: i });
     const hasIntakeAction = s.actions.some((a) => ["intakeIn", "intakeOut", "intakeStop", "eject"].includes(a.type));
+    if (s.actions.some((a) => a.type === "rearIntakeIn" || a.type === "rearIntakeStop") && !cfg.rearIntake) out.push({ level: "warn", text: "Step uses the rear intake but the robot has none configured (Robot tab → Mechanisms)", step: i });
     if (hasIntakeAction && !cfg.intake) out.push({ level: "warn", text: "Step uses the intake but the robot has none configured", step: i });
   });
   const firstMotion = routine.steps.findIndex((s) => s.motion.type !== "setPose" && s.motion.type !== "wait");

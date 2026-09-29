@@ -118,15 +118,27 @@ export function RobotPanel() {
         <Num label="Drive efficiency" value={robot.efficiency} onChange={set("efficiency")} step={0.01} min={0.5} max={1} hint="Gearbox/chain losses. Real drivetrains reach roughly 85-95% of free speed." />
       </Section>
 
-      <Section title="Mechanisms">
-        <Check label="Intake" value={!!robot.intake} onChange={(v) => setRobot({ intake: v ? { reach: 4, width: 12, capacity: 6 } : null })} />
+      <Section title="Pickup & scoring">
+        <p className="note">Where the robot picks pieces up and scores from. The green zones on the field show the pickup areas.</p>
+        <Check label="Front pickup" value={!!robot.intake} onChange={(v) => setRobot({ intake: v ? { reach: 4, width: 12, capacity: 6 } : null })} />
         {robot.intake && (
           <>
             <Num label="Reach" value={robot.intake.reach} onChange={(v) => setRobot({ intake: { ...robot.intake!, reach: v } })} unit="in" min={1} />
             <Num label="Width" value={robot.intake.width} onChange={(v) => setRobot({ intake: { ...robot.intake!, width: v } })} unit="in" min={1} />
-            <Num label="Capacity" value={robot.intake.capacity} onChange={(v) => setRobot({ intake: { ...robot.intake!, capacity: Math.round(v) } })} min={1} />
+            <Num label="Holds up to" value={robot.intake.capacity} onChange={(v) => setRobot({ intake: { ...robot.intake!, capacity: Math.round(v) } })} min={1} />
+            <Sel label="Picks up" value={robot.intake.standingOnly ? "standing" : "any"} options={[{ value: "any", label: "Any orientation (standing or lying)" }, { value: "standing", label: "Standing pieces only" }]} onChange={(v) => setRobot({ intake: { ...robot.intake!, standingOnly: v === "standing" } })} />
           </>
         )}
+        <Check label="Back pickup" value={!!robot.rearIntake} onChange={(v) => setRobot({ rearIntake: v ? { reach: 4, width: 10, capacity: 6, standingOnly: true } : null })} />
+        {robot.rearIntake && (
+          <>
+            <Num label="Reach" value={robot.rearIntake.reach} onChange={(v) => setRobot({ rearIntake: { ...robot.rearIntake!, reach: v } })} unit="in" min={1} />
+            <Num label="Width" value={robot.rearIntake.width} onChange={(v) => setRobot({ rearIntake: { ...robot.rearIntake!, width: v } })} unit="in" min={1} />
+            <Num label="Holds up to" value={robot.rearIntake.capacity} onChange={(v) => setRobot({ rearIntake: { ...robot.rearIntake!, capacity: Math.round(v) } })} min={1} />
+            <Sel label="Picks up" value={robot.rearIntake.standingOnly ? "standing" : "any"} options={[{ value: "standing", label: "Standing pieces only" }, { value: "any", label: "Any orientation (standing or lying)" }]} onChange={(v) => setRobot({ rearIntake: { ...robot.rearIntake!, standingOnly: v === "standing" } })} />
+          </>
+        )}
+        <Sel label="Scores from the" value={robot.scoreSide ?? "front"} options={[{ value: "front", label: "Front" }, { value: "back", label: "Back" }]} onChange={(v) => setRobot({ scoreSide: v })} hint="The Place action reaches out of this end of the robot. Drive so that end faces the goal." />
       </Section>
 
       <Section title="Sensors & odometry" open={false}>

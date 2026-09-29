@@ -116,6 +116,8 @@ export interface GameRules {
 export interface MechState {
   /** +1 intake in, -1 outtake, 0 off */
   intake: number;
+  /** rear intake: +1 on, 0 off */
+  rear: number;
   clamp: boolean;
 }
 
@@ -170,7 +172,7 @@ export function createWorld(init: WorldInit, start: { x: number; y: number; head
     alliance: "red",
     robotBox: { hl: 7.5, hw: 7.5 },
     held: objects.filter((o) => o.held).map((o) => o.id),
-    mech: { intake: 0, clamp: false },
+    mech: { intake: 0, rear: 0, clamp: false },
     env: { ...defaultEnv, fieldSize: init.fieldSize },
     contacts: 0,
   };
@@ -528,20 +530,26 @@ function updateMechanisms(w: World, cfg: RobotConfig): void {
       o.vx = 0; o.vy = 0;
     }
   }
-  // intake capture zone
-  if (w.mech.intake > 0 && cfg.intake) {
+  // intake capture zones: front (any orientation unless configured otherwise) and rear (standing objects by default)
+  const zones: { on: boolean; spec: NonNullable<RobotConfig["intake"]>; dir: 1 | -1 }[] = [
+    { on: w.mech.intake > 0, spec: cfg.intake as never, dir: 1 },
+    { on: w.mech.rear > 0, spec: cfg.rearIntake as never, dir: -1 },
+  ];
+  for (const zn of zones) {
+    if (!zn.on || !zn.spec) continue;
     const zone: Obb = {
-      x: s.x + f.x * (cfg.length / 2 + cfg.intake.reach / 2),
-      y: s.y + f.y * (cfg.length / 2 + cfg.intake.reach / 2),
+      x: s.x + f.x * zn.dir * (cfg.length / 2 + zn.spec.reach / 2),
+      y: s.y + f.y * zn.dir * (cfg.length / 2 + zn.spec.reach / 2),
       heading: s.heading,
-      hl: cfg.intake.reach / 2,
-      hw: cfg.intake.width / 2,
+      hl: zn.spec.reach / 2,
+      hw: zn.spec.width / 2,
     };
     for (const o of w.objects) {
       if (o.state !== "field" || o.carriable || o.fixed) continue;
+      if (zn.spec.standingOnly && o.lying) continue; // e.g. a rear roller can't swallow a pin lying on its side
       if (!canHold(w, cfg, o.kind)) continue;
       const inner = w.objects.find((q) => q.state === "nested" && q.nestedIn === o.id);
-      if (inner && (!canHold(w, cfg, inner.kind) || w.held.length + 2 > (cfg.intake?.capacity ?? 0))) continue; // a Cup with a Pin in it needs room for both
+      if (inner && (!canHold(w, cfg, inner.kind) || w.held.length + 2 > maxHold(cfg))) continue; // a Cup with a Pin in it needs room for both
       if (closestOnObb(zone, o.x, o.y).inside) {
         o.state = "held";
         if (o.lying) o.lying = false;
@@ -559,17 +567,21 @@ function heldOfKind(w: World, kind: string): number {
 }
 
 /** Intake capacity check: overall capacity plus the game's per-kind possession limits (Override SG6). */
+export function maxHold(cfg: RobotConfig): number {
+  return Math.max(cfg.intake?.capacity ?? 0, cfg.rearIntake?.capacity ?? 0);
+}
+
 export function canHold(w: World, cfg: RobotConfig, kind: string): boolean {
-  if (!cfg.intake) return false;
-  if (w.held.length >= cfg.intake.capacity) return false;
+  if (w.held.length >= maxHold(cfg)) return false;
   const lim = w.rules?.possession?.[kind];
   return lim === undefined || heldOfKind(w, kind) < lim;
 }
 
 /** Robot front-center point (where mechanisms interact with the field). */
-export function frontPoint(w: World, cfg: RobotConfig): Vec {
+export function frontPoint(w: World, cfg: RobotConfig, back = false): Vec {
   const f = forwardOf(w.robot.heading);
-  return { x: w.robot.x + f.x * (cfg.length / 2), y: w.robot.y + f.y * (cfg.length / 2) };
+  const k = back ? -1 : 1;
+  return { x: w.robot.x + f.x * k * (cfg.length / 2), y: w.robot.y + f.y * k * (cfg.length / 2) };
 }
 
 /**
@@ -583,15 +595,17 @@ export function placeHeld(w: World, cfg: RobotConfig, prefer?: string): string |
     return placed > 0 ? null : why;
   }
   if (w.held.length === 0) return "nothing held to place";
-  const fp = frontPoint(w, cfg);
+  const back = cfg.scoreSide === "back";
+  const fp = frontPoint(w, cfg, back);
   const f = forwardOf(w.robot.heading);
+  const side = back ? "behind" : "in front of";
   let goal: GoalState | null = null, gd = Infinity;
   for (const g of w.goals) {
     const d = Math.hypot(g.x - fp.x, g.y - fp.y);
-    const ahead = (g.x - w.robot.x) * f.x + (g.y - w.robot.y) * f.y;
+    const ahead = ((g.x - w.robot.x) * f.x + (g.y - w.robot.y) * f.y) * (back ? -1 : 1);
     if (d <= g.reach && ahead > 0 && d < gd) { goal = g; gd = d; }
   }
-  if (!goal) { w.events.push({ t: w.t, type: "reject", text: "no goal within reach in front of the robot" }); return "no goal within reach in front of the robot"; }
+  if (!goal) { w.events.push({ t: w.t, type: "reject", text: `no goal within reach ${side} the robot` }); return `no goal within reach ${side} the robot`; }
   if (goal.alliance && goal.alliance !== w.alliance) { w.events.push({ t: w.t, type: "reject", goal: goal.id, text: "opposing Alliance Goal (SG9)" }); return `that is the opposing Alliance's Goal (rule SG9)`; }
   if (cfg.maxStack !== undefined && goal.stack.length >= cfg.maxStack) { w.events.push({ t: w.t, type: "reject", goal: goal.id, text: "stack taller than the robot can reach" }); return "the stack is taller than the robot can reach"; }
   const order = [...w.held].sort((a, b) => {

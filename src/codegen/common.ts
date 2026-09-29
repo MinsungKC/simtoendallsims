@@ -36,12 +36,15 @@ export function describeMotion(m: MotionSpec): string {
 }
 
 /** Mechanism code that is identical in every C++ target. `intake` and `clamp` objects are declared per target. */
-export function actionCpp(a: ActionSpec, hasIntake: boolean): string[] {
+export function actionCpp(a: ActionSpec, hasIntake: boolean, hasRear = false): string[] {
+  const rear = (s: string) => (hasRear ? [s] : [`// ${s.replace(/;$/, "")}  (no rear intake ports set)`]);
   const intake = (s: string) => (hasIntake ? [s] : [`// ${s.replace(/;$/, "")}  (no intake configured)`]);
   switch (a.type) {
     case "intakeIn": return intake("intake.move(127);");
     case "intakeOut": return intake("intake.move(-127);");
     case "intakeStop": return intake("intake.move(0);");
+    case "rearIntakeIn": return rear("rear_intake.move(127);");
+    case "rearIntakeStop": return rear("rear_intake.move(0);");
     case "eject": return hasIntake ? ["intake.move(-127);", "pros::delay(250);", "intake.move(0);"] : ["// eject (no intake configured)"];
     case "clamp": return ["clamp_piston.set_value(true);"];
     case "unclamp": return ["clamp_piston.set_value(false);"];

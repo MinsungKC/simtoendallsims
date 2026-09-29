@@ -20,6 +20,8 @@ export interface Ports {
   right: number[];
   imu: number;
   intake: number[];
+  /** Rear intake motors (only used when the robot has a rear intake) */
+  rearIntake: number[];
   intakeCartridge: 100 | 200 | 600;
   /** ADI port letter for the clamp piston */
   clamp: string;
@@ -34,6 +36,7 @@ export function defaultPorts(cfg: RobotConfig): Ports {
     right: Array.from({ length: n }, (_, i) => n + i + 1),
     imu: 10,
     intake: cfg.intake ? [9] : [],
+    rearIntake: cfg.rearIntake ? [8] : [],
     intakeCartridge: 600,
     clamp: "A",
     tracking: cfg.odom.trackingWheels.map((_, i) => ({ port: 11 + i })),

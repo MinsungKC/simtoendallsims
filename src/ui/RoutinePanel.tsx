@@ -12,7 +12,7 @@ const MOTION_LABEL: Record<MotionSpec["type"], string> = {
 };
 
 const ACTION_LABEL: Record<ActionType, string> = {
-  intakeIn: "Intake in", intakeOut: "Intake out", intakeStop: "Intake stop", clamp: "Clamp", unclamp: "Unclamp", eject: "Eject", place: "Place held object on Goal", toggleSet: "Set Toggle", custom: "Custom code",
+  intakeIn: "Intake in", intakeOut: "Intake out", intakeStop: "Intake stop", rearIntakeIn: "Rear intake on", rearIntakeStop: "Rear intake off", clamp: "Clamp", unclamp: "Unclamp", eject: "Eject", place: "Place held object on Goal", toggleSet: "Set Toggle", custom: "Custom code",
 };
 
 export const TOOLS: { id: Tool; label: string; hint: string }[] = [
@@ -207,8 +207,10 @@ function ActionsEditor({ step }: { step: Step }) {
   const add = (type: ActionType) => st.addAction(step.id, { id: uid("a"), type, when: { kind: "start" }, code: type === "custom" ? "// your code here" : undefined });
   const isTurn = step.motion.type === "turnToHeading" || step.motion.type === "turnToPoint" || step.motion.type === "swingToHeading";
   const quick: { label: string; type: ActionType; when: Trigger; arg?: string; show: boolean }[] = [
-    { label: "Intake on", type: "intakeIn", when: { kind: "start" }, show: hasIntake },
-    { label: "Intake off", type: "intakeStop", when: { kind: "end" }, show: hasIntake },
+    { label: "Front intake on", type: "intakeIn", when: { kind: "start" }, show: hasIntake },
+    { label: "Front intake off", type: "intakeStop", when: { kind: "end" }, show: hasIntake },
+    { label: "Rear intake on", type: "rearIntakeIn", when: { kind: "start" }, show: !!st.robot.rearIntake },
+    { label: "Rear intake off", type: "rearIntakeStop", when: { kind: "end" }, show: !!st.robot.rearIntake },
     { label: "Clamp", type: "clamp", when: { kind: "end" }, show: true },
     { label: "Release", type: "unclamp", when: { kind: "end" }, show: true },
     { label: "Place on goal", type: "place", when: { kind: "end" }, show: !!st.game().goals?.length },

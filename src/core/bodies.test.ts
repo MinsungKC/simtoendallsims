@@ -78,3 +78,21 @@ describe("loose-object dynamics", () => {
     expect(w.objects[1].state).toBe("field");
   });
 });
+
+describe("front and rear pickup, scoring side", () => {
+  const rear = { ...cfg, intake: null, rearIntake: { reach: 4, width: 10, capacity: 4, standingOnly: true } };
+  const front = { ...cfg, intake: { reach: 4, width: 12, capacity: 4 }, rearIntake: null };
+  const at = (c: typeof cfg, o: Partial<GameObject>) => {
+    const w = createWorld({ ...base, objects: [pin({ x: 0, y: -11, ...o })] }, { x: 0, y: 0, heading: 0 }); // 3.5" behind the tail
+    w.mech.rear = 1; w.mech.intake = 1;
+    for (let i = 0; i < 20; i++) stepWorld(w, c, 0, 0, 0.005);
+    return w.objects[0].state;
+  };
+  it("the rear takes a standing pin but not one lying on its side; the front takes either", () => {
+    expect(at(rear, {})).toBe("held");
+    expect(at(rear, { lying: true, half: 2.2, angle: 90 })).toBe("field");
+    const fr = (o: Partial<GameObject>) => { const w = createWorld({ ...base, objects: [pin({ y: 11, ...o })] }, { x: 0, y: 0, heading: 0 }); w.mech.intake = 1; for (let i = 0; i < 20; i++) stepWorld(w, front, 0, 0, 0.005); return w.objects[0].state; };
+    expect(fr({})).toBe("held");
+    expect(fr({ lying: true, half: 2.2, angle: 90 })).toBe("held");
+  });
+});

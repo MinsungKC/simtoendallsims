@@ -25,11 +25,11 @@ function pursuitWaypoints(m: Extract<MotionSpec, { type: "follow" }>, trackWidth
   return out;
 }
 
-function stepCode(step: Step, i: number, trackWidth: number, hasIntake: boolean, startPose: { x: number; y: number }): string[] {
+function stepCode(step: Step, i: number, trackWidth: number, hasIntake: boolean, hasRear: boolean, startPose: { x: number; y: number }): string[] {
   const m = step.motion;
   const out: string[] = [`// ${i + 1}. ${describeMotion(m)}`];
   const { start, mid, end } = splitActions(step);
-  for (const a of start) out.push(...actionCpp(a, hasIntake));
+  for (const a of start) out.push(...actionCpp(a, hasIntake, hasRear));
   const slew = (dist: number) => (dist > 12 ? ", true" : "");
   let set: string[] = [];
   let unit: "in" | "deg" | "index" = "in";
@@ -80,7 +80,7 @@ function stepCode(step: Step, i: number, trackWidth: number, hasIntake: boolean,
   }
   out.push(...set);
   if (m.type === "setPose" || m.type === "wait") {
-    for (const a of mid) out.push(...actionCpp(a, hasIntake));
+    for (const a of mid) out.push(...actionCpp(a, hasIntake, hasRear));
   } else {
     for (const a of mid) {
       const w = a.when;
@@ -88,11 +88,11 @@ function stepCode(step: Step, i: number, trackWidth: number, hasIntake: boolean,
         if (unit === "index") out.push(`chassis.pid_wait_until_index(${indexFor(w.value)}); // waypoint ~${num(w.value, 1)} in along the path`);
         else out.push(`chassis.pid_wait_until(${unit === "deg" ? DEG(w.value) : IN(w.value)});`);
       } else if (w.kind === "delay") out.push(`pros::delay(${w.ms});`);
-      out.push(...actionCpp(a, hasIntake));
+      out.push(...actionCpp(a, hasIntake, hasRear));
     }
     out.push("chassis.pid_wait();");
   }
-  for (const a of end) out.push(...actionCpp(a, hasIntake));
+  for (const a of end) out.push(...actionCpp(a, hasIntake, hasRear));
   return out;
 }
 
@@ -101,6 +101,7 @@ export function generateEz(input: GenInput): GenResult {
   const d = derive(cfg);
   const fn = ident(input.fnName ?? "auton_1");
   const hasIntake = ports.intake.length > 0;
+  const hasRear = ports.rearIntake.length > 0;
   const usesClamp = routine.steps.some((s) => s.actions.some((a) => a.type === "clamp" || a.type === "unclamp"));
   const warnings: string[] = [];
   const notes = [
@@ -176,7 +177,7 @@ export function generateEz(input: GenInput): GenResult {
   }
   let cur = { x: routine.start.x, y: routine.start.y };
   routine.steps.forEach((s, i) => {
-    A.push(...indent(stepCode(s, i, cfg.trackWidth, hasIntake, cur)));
+    A.push(...indent(stepCode(s, i, cfg.trackWidth, hasIntake, hasRear, cur)));
     const m = s.motion;
     if ("x" in m && "y" in m) cur = { x: m.x, y: m.y };
   });
@@ -252,6 +253,7 @@ export function generateEz(input: GenInput): GenResult {
 
   const H = ["#pragma once", "", "void default_constants();", `void ${fn}();`, ""];
   const S = ['#pragma once', "", '#include "EZ-Template/api.hpp"', '#include "api.h"', "", "extern Drive chassis;", ""];
+  if (hasRear) S.push(`inline pros::MotorGroup rear_intake(${motorList(ports.rearIntake)}, pros::MotorGears::${ports.intakeCartridge === 100 ? "red" : ports.intakeCartridge === 200 ? "green" : "blue"});`);
   if (hasIntake) S.push(`inline pros::MotorGroup intake(${motorList(ports.intake)}, pros::MotorGears::${ports.intakeCartridge === 100 ? "red" : ports.intakeCartridge === 200 ? "green" : "blue"});`);
   if (usesClamp) S.push(`inline pros::adi::DigitalOut clamp_piston('${ports.clamp}');`);
   S.push("");

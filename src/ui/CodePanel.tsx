@@ -61,6 +61,7 @@ export function CodePanel() {
         <IntList label="Right motors" value={ports.right} onChange={(right) => setPorts({ right })} />
         <Num label="IMU port" value={ports.imu} onChange={(imu) => setPorts({ imu })} min={1} max={21} />
         <IntList label="Intake motors" value={ports.intake} onChange={(intake) => setPorts({ intake })} />
+        {robot.rearIntake && <IntList label="Rear intake motors" value={ports.rearIntake ?? []} onChange={(rearIntake) => setPorts({ rearIntake })} />}
         <Sel label="Intake cartridge" value={ports.intakeCartridge} options={[{ value: 100, label: "red" }, { value: 200, label: "green" }, { value: 600, label: "blue" }]} onChange={(v) => setPorts({ intakeCartridge: v })} />
         <label className="row"><span>Clamp ADI port</span><input value={ports.clamp} maxLength={1} onChange={(e) => setPorts({ clamp: e.target.value.toUpperCase().slice(0, 1) || "A" })} /></label>
         <Sel label="Driver control" value={ports.controller} options={[{ value: "arcade", label: "Arcade" }, { value: "tank", label: "Tank" }]} onChange={(v) => setPorts({ controller: v })} />

@@ -14,12 +14,15 @@ function vexRatio(c: number): string {
   return c === 100 ? "ratio36_1" : c === 200 ? "ratio18_1" : "ratio6_1";
 }
 
-function actionVex(a: ActionSpec, hasIntake: boolean): string[] {
+function actionVex(a: ActionSpec, hasIntake: boolean, hasRear = false): string[] {
+  const rr = (s: string) => (hasRear ? [s] : [`// ${s.replace(/;$/, "")}  (no rear intake ports set)`]);
   const i = (s: string) => (hasIntake ? [s] : [`// ${s.replace(/;$/, "")}  (no intake configured)`]);
   switch (a.type) {
     case "intakeIn": return i("intake.spin(fwd, 12, volt);");
     case "intakeOut": return i("intake.spin(reverse, 12, volt);");
     case "intakeStop": return i("intake.stop();");
+    case "rearIntakeIn": return rr("rear_intake.spin(fwd, 12, volt);");
+    case "rearIntakeStop": return rr("rear_intake.stop();");
     case "eject": return hasIntake ? ["intake.spin(reverse, 12, volt);", "wait(250, msec);", "intake.stop();"] : ["// eject (no intake configured)"];
     case "clamp": return ["clamp_piston.open();"];
     case "unclamp": return ["clamp_piston.close();"];
@@ -40,6 +43,7 @@ export function generateJar(input: GenInput): GenResult {
   const d = derive(cfg);
   const fn = ident(input.fnName ?? "auton_1");
   const hasIntake = ports.intake.length > 0;
+  const hasRear = ports.rearIntake.length > 0;
   const usesClamp = routine.steps.some((s) => s.actions.some((a) => a.type === "clamp" || a.type === "unclamp"));
   const warnings: string[] = [];
   const notes = [
@@ -83,6 +87,12 @@ export function generateJar(input: GenInput): GenResult {
     RC.push(`motor_group intake = motor_group(${names.join(", ")});`);
     RH.push("extern motor_group intake;");
   }
+  if (hasRear) {
+    const names = ports.rearIntake.map((_, i) => `RI${i + 1}`);
+    ports.rearIntake.forEach((p, i) => { RC.push(`motor ${names[i]} = motor(${PORT(p)}, ${vexRatio(ports.intakeCartridge)}, ${p < 0 ? "true" : "false"});`); RH.push(`extern motor ${names[i]};`); });
+    RC.push(`motor_group rear_intake = motor_group(${names.join(", ")});`);
+    RH.push("extern motor_group rear_intake;");
+  }
   if (usesClamp) { RC.push(`pneumatics clamp_piston = pneumatics(Brain.ThreeWirePort.${ports.clamp.toUpperCase()});`); RH.push("extern pneumatics clamp_piston;"); }
   RC.push("controller Controller1 = controller(primary);", "", "void vexcodeInit(void) {", "  // nothing to initialize", "}", "");
   RH.push("extern controller Controller1;", "", "void vexcodeInit(void);", "");
@@ -121,7 +131,7 @@ export function generateJar(input: GenInput): GenResult {
     const m = step.motion;
     const out: string[] = [`// ${i + 1}. ${describeMotion(m)}`];
     const { start, mid, end } = splitActions(step);
-    for (const x of start) out.push(...actionVex(x, hasIntake));
+    for (const x of start) out.push(...actionVex(x, hasIntake, hasRear));
     if (mid.length && m.type !== "setPose" && m.type !== "wait") {
       const fnName = `${fn}_step${i + 1}_actions`;
       const body: string[] = [];
@@ -131,11 +141,11 @@ export function generateJar(input: GenInput): GenResult {
         const wait = Math.max(0, t.ms - elapsed);
         elapsed = Math.max(elapsed, t.ms);
         body.push(`wait(${wait}, msec); // ${x.when.kind === "distance" ? `~when the simulated robot had traveled ${num((x.when as { value: number }).value, 1)} (re-time on robot)` : "delay"}`);
-        body.push(...actionVex(x, hasIntake));
+        body.push(...actionVex(x, hasIntake, hasRear));
       }
       threadFns.push(`void ${fnName}() {`, ...indent(body, 2), "}", "");
       out.push(`thread ${fnName}_thread(${fnName});`);
-    } else for (const x of mid) out.push(...actionVex(x, hasIntake));
+    } else for (const x of mid) out.push(...actionVex(x, hasIntake, hasRear));
 
     const maxV = speedToVolts(m && "maxSpeed" in m ? m.maxSpeed : 127);
     const minV = speedToVolts(m && "minSpeed" in m ? m.minSpeed : 0);
@@ -183,7 +193,7 @@ export function generateJar(input: GenInput): GenResult {
         break;
       }
     }
-    for (const x of end) out.push(...actionVex(x, hasIntake));
+    for (const x of end) out.push(...actionVex(x, hasIntake, hasRear));
     return out;
   };
 

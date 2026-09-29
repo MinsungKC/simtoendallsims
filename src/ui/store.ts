@@ -60,6 +60,9 @@ interface Store {
   setGame: (id: string) => void;
   setTarget: (t: TargetId) => void;
   setCodeFrame: (f: CodeFrame) => void;
+  drawReverse: boolean;
+  setDrawReverse: (v: boolean) => void;
+  addSteps: (motions: MotionSpec[]) => string | null;
   setSimOpts: (patch: Partial<SimOptions>) => void;
   setCustomField: (f: CustomField | null) => void;
 
@@ -284,6 +287,16 @@ export const useStore = create<Store>((set, get) => {
       changed();
     },
     setTarget: (target) => { set({ target }); persist(get()); },
+    drawReverse: false,
+    setDrawReverse: (drawReverse) => set({ drawReverse }),
+    addSteps: (motions) => {
+      if (!motions.length) return null;
+      pushHistory();
+      const steps: Step[] = motions.map((motion) => ({ id: uid(), motion, actions: [] }));
+      set((s) => ({ routine: { ...s.routine, steps: [...s.routine.steps, ...steps] }, selected: steps[steps.length - 1].id }));
+      changed();
+      return steps[steps.length - 1].id;
+    },
     setCodeFrame: (codeFrame) => { set({ codeFrame }); persist(get()); },
     setSimOpts: (patch) => { set((s) => ({ simOpts: { ...s.simOpts, ...patch } })); changed(); },
     setCustomField: (customField) => { set({ customField }); changed(); },

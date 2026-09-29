@@ -10,7 +10,7 @@ export type Trigger =
   | { kind: "distance"; value: number } // inches traveled (turns: degrees turned) in the step - LemLib waitUntil()
   | { kind: "delay"; ms: number };
 
-export type ActionType = "intakeIn" | "intakeOut" | "intakeStop" | "clamp" | "unclamp" | "eject" | "place" | "toggleSet" | "custom";
+export type ActionType = "intakeIn" | "intakeOut" | "intakeStop" | "rearIntakeIn" | "rearIntakeStop" | "clamp" | "unclamp" | "eject" | "place" | "toggleSet" | "custom";
 
 export interface ActionSpec {
   id: string;
