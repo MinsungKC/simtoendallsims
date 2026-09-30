@@ -107,3 +107,7 @@ when the heading needs it), chained corners, and stop-and-turn. Boomerang and pu
 with the robot pointing the way the job needs (front to a Goal, back to a rear-pickup piece). A pursuit curve is only used where the whole curve stays clear of
 Goals and walls at the full turning radius; otherwise that leg falls back to plain legs. Which style actually wins is decided by simulation, so smooth moves show up
 only where they save time and run clean.
+
+## Fix whole route (target-reaching)
+
+`src/core/fixroute.ts`. Each step has a goal (point and/or heading). Going in order from the robot's *actual* simulated pose, it tries the step as drawn plus boomerang, pure-pursuit, chained and stop-and-turn alternatives (forwards and reversed, along a collision-free A* path), ranked by the calibrated time model and verified in the sim. A candidate is valid only if it ends within 2 in / 5° of the goal, doesn't time out, and doesn't hit Goals/Loaders; the fastest valid one wins. Steps that cannot reach their goal are reported.

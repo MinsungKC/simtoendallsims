@@ -1,9 +1,8 @@
-import { firstBlocked, type NavOptions } from "./nav";
-import { fitStroke } from "./fit";
-import { pathLength, samplePath } from "./path";
+import type { NavOptions } from "./nav";
+import { buildGroup, dist } from "./legs";
 import { bestChains, calibrate, legPath, type Pose, type StopSpec } from "./timeplan";
 import { scoreSpecOf, zoneTakes, type RobotConfig } from "./robot";
-import { defaultMotion, uid, type ActionType, type ActionSpec, type MotionSpec, type Routine, type Step } from "./routine";
+import { uid, type ActionType, type ActionSpec, type MotionSpec, type Routine, type Step } from "./routine";
 import { simulate, type Recording } from "./runtime";
 import { optimizeTimeouts } from "./tune";
 import type { Obstacle, WorldInit } from "./world";
@@ -51,9 +50,6 @@ export interface PlanCandidate {
   pushes: number;
 }
 
-const bearing = (a: { x: number; y: number }, b: { x: number; y: number }) => (Math.atan2(b.x - a.x, b.y - a.y) * 180) / Math.PI;
-const angleDiff = (a: number, b: number) => Math.abs(normalize(a - b));
-const dist = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
 
 function sidesFor(task: PlanTask, cfg: RobotConfig): ("front" | "back")[] {
   if (task.side !== "auto") return [task.side];
@@ -107,69 +103,14 @@ function buildFromChain(base: Routine, tasks: PlanTask[], chain: Pose[], cfg: Ro
   const steps: Step[] = [];
   const uidStep = (motion: MotionSpec, actions: ActionSpec[] = [], label?: string): Step => ({ id: uid(), motion, actions, label });
   let cur = { x: base.start.x, y: base.start.y, h: base.start.heading };
-  const timeoutFor = (len: number) => Math.max(1500, Math.ceil(((len / 12) * 1000 + 1500) / 100) * 100);
   tasks.forEach((task, ti) => {
     const pose = chain[ti];
     const path = legPath(cur, pose, navs[ti], cfg);
     const spdTravel = task.speed ?? (fast ? 127 : 110);
     const cap = approachCap(task); // a standing Pin or Cup knocked at speed tips over and the pickup then can't take it
-    const group: Step[] = [];
-    let h = cur.h;
-    // pure pursuit: one smooth curve along the planned route, driven forwards OR backwards to end on the heading the job needs.
-    // Only used when the whole curve stays clear of Goals/walls with the full turning radius; otherwise this leg falls back to plain legs.
-    let pursued = false;
-    if (style === "pursuit" && !task.pass && dist(cur, pose) > 12) {
-      const dense: { x: number; y: number }[] = [];
-      for (let k = 0; k + 1 < path.length; k++) { const n = Math.max(1, Math.ceil(dist(path[k], path[k + 1]) / 2)); for (let q = 0; q < n; q++) dense.push({ x: path[k].x + ((path[k + 1].x - path[k].x) * q) / n, y: path[k].y + ((path[k + 1].y - path[k].y) * q) / n }); }
-      dense.push({ x: pose.x, y: pose.y });
-      const segs = fitStroke(dense, 1.2);
-      const fm = defaultMotion("follow", { x: cur.x, y: cur.y, heading: cur.h });
-      if (fm.type === "follow" && segs.length) {
-        fm.path.segments = segs.map((sg) => ({ p: sg.p.map((q) => ({ x: Math.round(q.x * 100) / 100, y: Math.round(q.y * 100) / 100 })) as typeof sg.p }));
-        const pts = samplePath(fm.path);
-        const first = segs[0].p, lastSeg = segs[segs.length - 1].p;
-        const startTan = bearing(first[0], first[1].x === first[0].x && first[1].y === first[0].y ? first[2] : first[1]);
-        const endTan = bearing(lastSeg[2].x === lastSeg[3].x && lastSeg[2].y === lastSeg[3].y ? lastSeg[1] : lastSeg[2], lastSeg[3]);
-        const forwards = pose.h !== null ? angleDiff(endTan, pose.h) <= 90 : angleDiff(h, startTan) <= 90;
-        if (firstBlocked(pts, navs[ti]) < 0) {
-          const want = forwards ? startTan : startTan + 180;
-          if (angleDiff(h, want) > 20) group.push(uidStep({ ...defaultMotion("turnToHeading", { x: 0, y: 0, heading: Math.round(normalize(want)) }), timeout: 2000 } as MotionSpec));
-          fm.forwards = forwards; fm.lookahead = 10;
-          fm.path.maxSpeed = Math.min(spdTravel, task.action === "pickup" ? cap : 127); fm.path.minSpeed = Math.min(40, fm.path.maxSpeed);
-          fm.timeout = timeoutFor(pathLength(fm.path)) + 800;
-          group.push(uidStep(fm));
-          h = forwards ? endTan : endTan + 180;
-          pursued = true;
-        }
-      }
-    }
-    for (let k = 1; !pursued && k < path.length; k++) {
-      const from = path[k - 1], to = path[k];
-      if (dist(from, to) < 0.5) continue;
-      const lead = bearing(from, to);
-      const fwd = angleDiff(h, lead), rev = angleDiff(h, lead + 180);
-      const back = rev + 8 < fwd;
-      const legH = back ? lead + 180 : lead;
-      const turn = angleDiff(h, legH);
-      const last = k === path.length - 1;
-      if (style === "boomerang" && last && pose.h !== null && !task.pass) {
-        // one move: drive there and end at the heading the job needs (the controller turns while it drives)
-        const fwdOk = angleDiff(lead, pose.h) <= 90;
-        const bm = defaultMotion("moveToPose", { x: Math.round(to.x * 4) / 4, y: Math.round(to.y * 4) / 4, heading: pose.h });
-        if (bm.type === "moveToPose") { bm.forwards = fwdOk; bm.lead = 0.4; bm.maxSpeed = Math.min(spdTravel, cap); bm.timeout = timeoutFor(dist(from, to)) + 1500; group.push(uidStep(bm)); h = pose.h; continue; }
-      }
-      const gentle = fast && !last && turn < 25;
-      if (turn > 6 && !gentle) group.push(uidStep({ ...defaultMotion("turnToPoint", { x: to.x, y: to.y, heading: 0 }), forwards: !back, timeout: 2500 } as MotionSpec));
-      const mv = defaultMotion("moveToPoint", { x: Math.round(to.x * 4) / 4, y: Math.round(to.y * 4) / 4, heading: 0 });
-      if (mv.type !== "moveToPoint") continue;
-      mv.forwards = !back; mv.maxSpeed = last ? Math.min(spdTravel, cap) : spdTravel; mv.timeout = timeoutFor(dist(from, to)) + (last && cap < spdTravel ? 1200 : 0);
-      if (gentle || (fast && !last && task.pass)) { mv.minSpeed = 45; mv.earlyExit = 6; }
-      if (last && task.pass) { mv.minSpeed = 45; mv.earlyExit = 6; }
-      group.push(uidStep(mv));
-      h = legH;
-    }
-    // arrive facing the way the job needs
-    if (pose.h !== null && angleDiff(h, pose.h) > 2 && !task.pass) group.push(uidStep({ ...defaultMotion("turnToHeading", { x: 0, y: 0, heading: pose.h }), timeout: 2000 } as MotionSpec));
+    const built = buildGroup({ cur, pose, path, style, speed: spdTravel, cap: task.action === "pickup" ? cap : 127, pass: task.pass, nav: navs[ti] });
+    const group: Step[] = built.steps;
+    const h = built.heading;
     if (!group.length) group.push(uidStep({ type: "wait", ms: 50 } as MotionSpec));
     const first: ActionSpec[] = [], last: ActionSpec[] = [];
     const side = pose.side;
