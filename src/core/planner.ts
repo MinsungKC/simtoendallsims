@@ -219,6 +219,9 @@ export async function planRoutes(a: PlanArgs): Promise<PlanCandidate[]> {
   // planning distances use a slim robot (so arrival poses next to a Goal are reachable); the routes actually driven use the full turning radius
   const navPlan: NavOptions = { obstacles: navObstacles, fieldSize, radius: cfg.width / 2 + 0.5, wall: cfg.width / 2 };
   const navDrive: NavOptions[] = tasks.map((_, ti) => ({ obstacles: navObstaclesFor(ti), fieldSize, radius: Math.hypot(cfg.length, cfg.width) / 2 + 1, wall: cfg.width / 2 }));
+  // the same legs ignoring loose pieces (only Goals/Loaders/walls are steered around): often much shorter, and bumping a ring or two costs only a little
+  const directList = avoidList(a.obstacles, [], DEFAULT_AVOID, a.routine, cfg);
+  const navDirect: NavOptions[] = tasks.map(() => ({ obstacles: directList, fieldSize, radius: Math.hypot(cfg.length, cfg.width) / 2 + 1, wall: cfg.width / 2 }));
   const chains = bestChains(a.routine.start, stopSpecs(tasks, cfg, fieldSize), cfg, navPlan, 3);
   const need = { pickup: tasks.filter((t) => t.action === "pickup").length, place: tasks.filter((t) => t.action === "place").length, toggle: tasks.filter((t) => t.action === "toggle").length };
   const evaluate = (r: Routine, style: string): PlanCandidate => {
@@ -247,13 +250,14 @@ export async function planRoutes(a: PlanArgs): Promise<PlanCandidate[]> {
     return Math.max(20, Math.min(127, Math.round(((tipSpeed(o.tip) * 0.7) / cal.v) * 127)));
   };
   const styles: ("boomerang" | "pursuit" | "chained" | "safe")[] = a.simple ? ["safe"] : ["boomerang", "pursuit", "chained", "safe"];
-  const total = chains.length * styles.length + 3;
+  const total = chains.length * styles.length * 2 + 3;
   let done = 0;
-  for (const chain of chains) for (const style of styles) {
+  const variants: [NavOptions[], string][] = [[navDrive, ""], [navDirect, ", straight past loose pieces"]];
+  for (const chain of chains) for (const style of styles) for (const [navs, tag] of variants) {
     if (a.shouldStop?.()) break;
-    const r = buildFromChain(a.routine, tasks, chain.poses, cfg, navDrive, style, approachCap);
+    const r = buildFromChain(a.routine, tasks, chain.poses, cfg, navs, style, approachCap);
     const sides = [...new Set(chain.poses.map((p) => p.side))].join("+");
-    out.push(evaluate(r, `${style === "boomerang" ? "smooth boomerang per stop" : style === "pursuit" ? "pure pursuit curves" : style === "chained" ? "chained corners" : "stop-and-turn"}, ${sides}, ~${chain.time.toFixed(1)} s predicted`));
+    out.push(evaluate(r, `${style === "boomerang" ? "smooth boomerang per stop" : style === "pursuit" ? "pure pursuit curves" : style === "chained" ? "chained corners" : "stop-and-turn"}, ${sides}, ~${chain.time.toFixed(1)} s predicted${tag}`));
     a.onProgress?.(++done / total);
     await new Promise((res) => setTimeout(res, 0));
   }

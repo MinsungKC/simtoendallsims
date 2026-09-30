@@ -348,11 +348,15 @@ export const useStore = create<Store>((set, get) => {
       const prep = prepareTasks({ tasks: s.tasks, game: g, world, cfg: s.robot, routine: base });
       set({ planning: 0, plans: null, planNotes: prep.notes, planErrors: prep.errors });
       if (prep.errors.length) { set({ plans: [], planning: null }); return; }
-      const plans = await planRoutes({
-        routine: base, tasks: prep.tasks, cfg: s.robot, game: g, world, obstacles: world.obstacles, seed: s.simOpts.seed, simple: s.simple,
-        onProgress: (p) => set({ planning: p }), shouldStop: () => stopFlag,
-      });
-      set({ plans, planning: null });
+      try {
+        const plans = await planRoutes({
+          routine: base, tasks: prep.tasks, cfg: s.robot, game: g, world, obstacles: world.obstacles, seed: s.simOpts.seed, simple: s.simple,
+          onProgress: (p) => set({ planning: p }), shouldStop: () => stopFlag,
+        });
+        set({ plans, planning: null });
+      } catch (e) {
+        set({ plans: [], planning: null, planErrors: [`Planning failed: ${e instanceof Error ? e.message : String(e)}`] });
+      }
     },
     stopPlan: () => { stopFlag = true; },
     applyPlan: (c) => {
