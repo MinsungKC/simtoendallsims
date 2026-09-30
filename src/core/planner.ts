@@ -1,4 +1,6 @@
-import type { NavOptions } from "./nav";
+import { firstBlocked, type NavOptions } from "./nav";
+import { fitStroke } from "./fit";
+import { pathLength, samplePath } from "./path";
 import { bestChains, calibrate, legPath, type Pose, type StopSpec } from "./timeplan";
 import { scoreSpecOf, zoneTakes, type RobotConfig } from "./robot";
 import { defaultMotion, uid, type ActionType, type ActionSpec, type MotionSpec, type Routine, type Step } from "./routine";
@@ -100,7 +102,7 @@ function stopSpecs(tasks: PlanTask[], cfg: RobotConfig, fieldSize: number): Stop
 }
 
 /** Turn the chosen poses into steps: face the leg, drive it, and at the stop face the required heading and act. "fast" chains gentle corners. */
-function buildFromChain(base: Routine, tasks: PlanTask[], chain: Pose[], cfg: RobotConfig, navs: NavOptions[], style: "boomerang" | "chained" | "safe", approachCap: (t: PlanTask) => number): Routine {
+function buildFromChain(base: Routine, tasks: PlanTask[], chain: Pose[], cfg: RobotConfig, navs: NavOptions[], style: "boomerang" | "pursuit" | "chained" | "safe", approachCap: (t: PlanTask) => number): Routine {
   const fast = style !== "safe";
   const steps: Step[] = [];
   const uidStep = (motion: MotionSpec, actions: ActionSpec[] = [], label?: string): Step => ({ id: uid(), motion, actions, label });
@@ -113,7 +115,35 @@ function buildFromChain(base: Routine, tasks: PlanTask[], chain: Pose[], cfg: Ro
     const cap = approachCap(task); // a standing Pin or Cup knocked at speed tips over and the pickup then can't take it
     const group: Step[] = [];
     let h = cur.h;
-    for (let k = 1; k < path.length; k++) {
+    // pure pursuit: one smooth curve along the planned route, driven forwards OR backwards to end on the heading the job needs.
+    // Only used when the whole curve stays clear of Goals/walls with the full turning radius; otherwise this leg falls back to plain legs.
+    let pursued = false;
+    if (style === "pursuit" && !task.pass && dist(cur, pose) > 12) {
+      const dense: { x: number; y: number }[] = [];
+      for (let k = 0; k + 1 < path.length; k++) { const n = Math.max(1, Math.ceil(dist(path[k], path[k + 1]) / 2)); for (let q = 0; q < n; q++) dense.push({ x: path[k].x + ((path[k + 1].x - path[k].x) * q) / n, y: path[k].y + ((path[k + 1].y - path[k].y) * q) / n }); }
+      dense.push({ x: pose.x, y: pose.y });
+      const segs = fitStroke(dense, 1.2);
+      const fm = defaultMotion("follow", { x: cur.x, y: cur.y, heading: cur.h });
+      if (fm.type === "follow" && segs.length) {
+        fm.path.segments = segs.map((sg) => ({ p: sg.p.map((q) => ({ x: Math.round(q.x * 100) / 100, y: Math.round(q.y * 100) / 100 })) as typeof sg.p }));
+        const pts = samplePath(fm.path);
+        const first = segs[0].p, lastSeg = segs[segs.length - 1].p;
+        const startTan = bearing(first[0], first[1].x === first[0].x && first[1].y === first[0].y ? first[2] : first[1]);
+        const endTan = bearing(lastSeg[2].x === lastSeg[3].x && lastSeg[2].y === lastSeg[3].y ? lastSeg[1] : lastSeg[2], lastSeg[3]);
+        const forwards = pose.h !== null ? angleDiff(endTan, pose.h) <= 90 : angleDiff(h, startTan) <= 90;
+        if (firstBlocked(pts, navs[ti]) < 0) {
+          const want = forwards ? startTan : startTan + 180;
+          if (angleDiff(h, want) > 20) group.push(uidStep({ ...defaultMotion("turnToHeading", { x: 0, y: 0, heading: Math.round(normalize(want)) }), timeout: 2000 } as MotionSpec));
+          fm.forwards = forwards; fm.lookahead = 10;
+          fm.path.maxSpeed = Math.min(spdTravel, task.action === "pickup" ? cap : 127); fm.path.minSpeed = Math.min(40, fm.path.maxSpeed);
+          fm.timeout = timeoutFor(pathLength(fm.path)) + 800;
+          group.push(uidStep(fm));
+          h = forwards ? endTan : endTan + 180;
+          pursued = true;
+        }
+      }
+    }
+    for (let k = 1; !pursued && k < path.length; k++) {
       const from = path[k - 1], to = path[k];
       if (dist(from, to) < 0.5) continue;
       const lead = bearing(from, to);
@@ -248,12 +278,12 @@ export async function planRoutes(a: PlanArgs): Promise<PlanCandidate[]> {
   // planning distances use a slim robot (so arrival poses next to a Goal are reachable); the routes actually driven use the full turning radius
   const navPlan: NavOptions = { obstacles: navObstacles, fieldSize, radius: cfg.width / 2 + 0.5, wall: cfg.width / 2 };
   const navDrive: NavOptions[] = tasks.map((_, ti) => ({ obstacles: navObstaclesFor(ti), fieldSize, radius: Math.hypot(cfg.length, cfg.width) / 2 + 1, wall: cfg.width / 2 }));
-  const chains = bestChains(a.routine.start, stopSpecs(tasks, cfg, fieldSize), cfg, navPlan, 4);
+  const chains = bestChains(a.routine.start, stopSpecs(tasks, cfg, fieldSize), cfg, navPlan, 3);
   const need = { pickup: tasks.filter((t) => t.action === "pickup").length, place: tasks.filter((t) => t.action === "place").length, toggle: tasks.filter((t) => t.action === "toggle").length };
   const evaluate = (r: Routine, style: string): PlanCandidate => {
-    let rec = simulate(r, cfg, a.world, { seed: a.seed });
-    let routine = r;
-    if (rec.duration <= limit + 5) { routine = optimizeTimeouts(r, rec.steps); rec = simulate(routine, cfg, a.world, { seed: a.seed }); }
+    const rec = simulate(r, cfg, a.world, { seed: a.seed });
+    // timeouts sized from the run itself (they never change how long a step that finished takes, so no second simulation)
+    const routine = rec.duration <= limit + 5 && !rec.steps.some((x) => x.timedOut) ? optimizeTimeouts(r, rec.steps) : r;
     const problems: string[] = [];
     for (const s of rec.steps) if (s.timedOut) problems.push(`step ${s.index + 1} timed out`);
     const ev = (t: string) => rec.events.filter((e) => e.type === t).length;
@@ -275,14 +305,14 @@ export async function planRoutes(a: PlanArgs): Promise<PlanCandidate[]> {
     if (!o?.tip || o.lying) return 127;
     return Math.max(20, Math.min(127, Math.round(((tipSpeed(o.tip) * 0.7) / cal.v) * 127)));
   };
-  const styles: ("boomerang" | "chained" | "safe")[] = a.simple ? ["safe"] : ["boomerang", "chained", "safe"];
+  const styles: ("boomerang" | "pursuit" | "chained" | "safe")[] = a.simple ? ["safe"] : ["boomerang", "pursuit", "chained", "safe"];
   const total = chains.length * styles.length + 3;
   let done = 0;
   for (const chain of chains) for (const style of styles) {
     if (a.shouldStop?.()) break;
     const r = buildFromChain(a.routine, tasks, chain.poses, cfg, navDrive, style, approachCap);
     const sides = [...new Set(chain.poses.map((p) => p.side))].join("+");
-    out.push(evaluate(r, `${style === "boomerang" ? "one smooth move per stop" : style === "chained" ? "chained corners" : "stop-and-turn"}, ${sides}, ~${chain.time.toFixed(1)} s predicted`));
+    out.push(evaluate(r, `${style === "boomerang" ? "smooth boomerang per stop" : style === "pursuit" ? "pure pursuit curves" : style === "chained" ? "chained corners" : "stop-and-turn"}, ${sides}, ~${chain.time.toFixed(1)} s predicted`));
     a.onProgress?.(++done / total);
     await new Promise((res) => setTimeout(res, 0));
   }

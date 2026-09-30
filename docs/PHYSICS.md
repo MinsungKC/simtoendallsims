@@ -101,3 +101,9 @@ controller's exit/settle overhead, which is why fewer, smoother motions win. `d`
 penalty through loose pieces). Dynamic programming over (stop, pose) gives the cheapest chain, and the best few distinct chains are turned into routes in
 three styles (one smooth move per stop, chained corners, stop-and-turn), simulated, repaired if they hit something, and ranked by simulated
 time. Approach speed into a standing Pin/Cup is capped below its tipping speed. The prediction matches the sim closely (5.4 s predicted, 5.6 s simulated in the test case).
+
+Styles tried per chain: **smooth boomerang** (one moveToPose per stop), **pure pursuit** (one follow curve along the planned route, plus a turn first/after
+when the heading needs it), chained corners, and stop-and-turn. Boomerang and pursuit run **forwards or backwards**: forwards is chosen so the move ends
+with the robot pointing the way the job needs (front to a Goal, back to a rear-pickup piece). A pursuit curve is only used where the whole curve stays clear of
+Goals and walls at the full turning radius; otherwise that leg falls back to plain legs. Which style actually wins is decided by simulation, so smooth moves show up
+only where they save time and run clean.

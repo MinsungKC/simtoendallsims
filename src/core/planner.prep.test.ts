@@ -83,3 +83,18 @@ describe("time model", () => {
     expect(all).toBeLessThanOrEqual(fixed + 1e-9);
   }, 60000);
 });
+
+describe("pure pursuit and smooth moves are part of the search, in either direction", () => {
+  it("offers pure-pursuit and boomerang candidates that drive backwards when the job needs the back, and ranks by simulated time", async () => {
+    const cupSW = override.objects.find((o) => o.kind === "cup" && o.x === -48 && o.y === -48)!;
+    const backCfg = { ...cfg, intake: { reach: 4, width: 12, capacity: 6, orientation: "lying" as const }, rearIntake: { reach: 4, width: 10, capacity: 6, orientation: "standing" as const } };
+    const tasks = [goal("red-S", -24, -48), pickup(cupSW, "Cup")];
+    const prep = prepareTasks({ ...args, cfg: backCfg, tasks });
+    const res = await planRoutes({ routine, tasks: prep.tasks, cfg: backCfg, game: override, world, obstacles: override.obstacles });
+    const withPursuit = res.filter((r) => r.routine.steps.some((s) => s.motion.type === "follow"));
+    expect(withPursuit.length).toBeGreaterThan(0);
+    const reversed = res.filter((r) => r.routine.steps.some((s) => "forwards" in s.motion && s.motion.forwards === false && (s.motion.type === "follow" || s.motion.type === "moveToPose")));
+    expect(reversed.length).toBeGreaterThan(0);
+    for (let i = 1; i < res.length; i++) if (res[i].ok === res[i - 1].ok) expect(res[i].duration + 0.5 * res[i].pushes).toBeGreaterThanOrEqual(res[i - 1].duration + 0.5 * res[i - 1].pushes - 1e-9);
+  }, 200000);
+});
