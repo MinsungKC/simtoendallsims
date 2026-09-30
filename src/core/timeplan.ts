@@ -60,7 +60,9 @@ export function bestChains(start: { x: number; y: number; heading: number }, sto
   // distances from each option of stop i to every cell: transitions read the cost from the destination's field
   const fields = stops.map((s) => s.poses.map((p) => distanceField(p, nav)));
   const leg = (from: { x: number; y: number; h: number }, to: Pose, field: { at: (x: number, y: number) => number }, endsFree: boolean): number => {
-    const d = field.at(from.x, from.y);
+    // a stop tucked into a goal's cutout sits inside its blocked footprint: measure from the nearest free ground instead
+    let d = field.at(from.x, from.y);
+    if (!Number.isFinite(d)) for (const r of [3, 5, 7]) for (let k = 0; k < 8; k++) d = Math.min(d, field.at(from.x + r * Math.cos((k * Math.PI) / 4), from.y + r * Math.sin((k * Math.PI) / 4)) + r);
     if (!Number.isFinite(d)) return Infinity;
     const chord = Math.hypot(to.x - from.x, to.y - from.y);
     const lead = chord < 0.5 ? from.h : bearing(from, to);

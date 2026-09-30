@@ -120,7 +120,21 @@ function buildFromChain(base: Routine, tasks: PlanTask[], chain: Pose[], cfg: Ro
     } else if (task.action === "place") last.push({ id: uid("a"), type: "place", when: { kind: "end" } });
     else if (task.action === "toggle") last.push({ id: uid("a"), type: "toggleSet", arg: task.toggleColor ?? base.alliance, when: { kind: "end" } });
     for (const e of task.extra ?? []) (e.when === "start" ? first : last).push({ id: uid("a"), type: e.type, arg: e.arg, when: { kind: e.when } });
-    group[0].actions.push(...first);
+    // an intake that runs the whole way swallows every loose piece it passes: switch it on only for the final stretch into the pickup
+    const intakeOn = first.filter((x) => x.type === "intakeIn" || x.type === "rearIntakeIn");
+    const others = first.filter((x) => !intakeOn.includes(x));
+    group[0].actions.push(...others);
+    if (intakeOn.length) {
+      let at = { x: cur.x, y: cur.y }, len = 0, lastMove = -1;
+      group.forEach((g, gi) => {
+        const m = g.motion;
+        if (m.type === "moveToPoint" || m.type === "moveToPose") { len = dist(at, m); at = { x: m.x, y: m.y }; lastMove = gi; }
+        else if (m.type === "follow") { const pts = m.path.segments.flatMap((sg) => sg.p); len = pts.slice(1).reduce((t, q, k) => t + dist(pts[k], q), 0) * 0.95; const e = m.path.segments.at(-1)!.p[3]; at = { x: e.x, y: e.y }; lastMove = gi; }
+      });
+      const gi = lastMove >= 0 ? lastMove : group.length - 1;
+      const run = 14; // the intake zone plus a little lead-in
+      for (const x of intakeOn) group[gi].actions.push(lastMove >= 0 && len > run + 4 ? { ...x, when: { kind: "distance", value: Math.round((len - run) * 10) / 10 } } : x);
+    }
     group[group.length - 1].actions.push(...last);
     steps.push(...group);
     cur = { x: pose.x, y: pose.y, h: pose.h ?? h };
@@ -222,7 +236,14 @@ export async function planRoutes(a: PlanArgs): Promise<PlanCandidate[]> {
   // the same legs ignoring loose pieces (only Goals/Loaders/walls are steered around): often much shorter, and bumping a ring or two costs only a little
   const directList = avoidList(a.obstacles, [], DEFAULT_AVOID, a.routine, cfg);
   const navDirect: NavOptions[] = tasks.map(() => ({ obstacles: directList, fieldSize, radius: Math.hypot(cfg.length, cfg.width) / 2 + 1, wall: cfg.width / 2 }));
-  const chains = bestChains(a.routine.start, stopSpecs(tasks, cfg, fieldSize), cfg, navPlan, 3);
+  const specs = stopSpecs(tasks, cfg, fieldSize);
+  const chains = bestChains(a.routine.start, specs, cfg, navPlan, 3);
+  if (!chains.length) {
+    let k = 1;
+    while (k < specs.length && bestChains(a.routine.start, specs.slice(0, k), cfg, navPlan, 1).length) k++;
+    const t = tasks[Math.min(k, tasks.length) - 1];
+    throw new Error(`No way for the robot to reach stop ${k} (${t.label})${specs[k - 1].poses.length ? " - every way in is blocked by a goal, loader or wall; move the target, or allow a different side or heading" : " - your pickup/scoring settings let no end of the robot do that job"}.`);
+  }
   const need = { pickup: tasks.filter((t) => t.action === "pickup").length, place: tasks.filter((t) => t.action === "place").length, toggle: tasks.filter((t) => t.action === "toggle").length };
   const evaluate = (r: Routine, style: string): PlanCandidate => {
     const rec = simulate(r, cfg, a.world, { seed: a.seed });
