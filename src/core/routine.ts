@@ -21,6 +21,8 @@ export interface ActionSpec {
   /** place: prefer "pin" | "cup" | "any"; toggleSet: "red" | "blue" | "yellow" */
   arg?: string;
   label?: string;
+  /** set when the action belongs to a point on a curve: it fires at that mark's distance and follows the mark when it moves */
+  markId?: string;
 }
 
 export interface BezierSegment {
@@ -29,8 +31,19 @@ export interface BezierSegment {
 }
 export interface Vec { x: number; y: number }
 
+/** A point the user pinned on a curve to mark something significant: a speed limit there and/or actions that fire when the robot reaches it. */
+export interface PathMark {
+  id: string;
+  /** distance from the start of the curve, inches */
+  d: number;
+  /** cap the speed (0-127) at this point (the profile brakes into it) */
+  speed?: number;
+  label?: string;
+}
+
 export interface PathSpec {
   segments: BezierSegment[];
+  marks?: PathMark[];
   /** Target cruise speed, 0-127 (LemLib path speed units) */
   maxSpeed: number;
   /** Minimum speed the path is allowed to slow to in curves */

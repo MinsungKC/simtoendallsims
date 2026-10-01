@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { defaultRobot, type RobotConfig } from "../core/robot";
-import { defaultMotion, emptyRoutine, mirrorRoutine, rotateRoutine, uid, type ActionSpec, type MotionSpec, type Routine, type Step } from "../core/routine";
+import { defaultMotion, emptyRoutine, mirrorRoutine, rotateRoutine, uid, type ActionSpec, type PathMark, type MotionSpec, type Routine, type Step } from "../core/routine";
 import { simulate, type Recording } from "../core/runtime";
 import { games } from "../games";
 import { worldInit, type CustomField, type GameModule } from "../games/types";
@@ -114,6 +114,8 @@ interface Store {
   addAction: (stepId: string, action: ActionSpec) => void;
   updateAction: (stepId: string, actionId: string, patch: Partial<ActionSpec>) => void;
   removeAction: (stepId: string, actionId: string) => void;
+  /** change the points pinned on a curve (and the actions tied to them) in one edit */
+  editMarks: (stepId: string, fn: (marks: PathMark[], actions: ActionSpec[]) => { marks: PathMark[]; actions: ActionSpec[] }, history?: boolean) => void;
   mirror: () => void;
   clearRoutine: () => void;
   allRoutines: () => Routine[];
@@ -474,6 +476,11 @@ export const useStore = create<Store>((set, get) => {
     },
     addAction: (stepId, action) => editStep(stepId, (st) => ({ ...st, actions: [...st.actions, action] })),
     updateAction: (stepId, actionId, patch) => editStep(stepId, (st) => ({ ...st, actions: st.actions.map((a) => (a.id === actionId ? ({ ...a, ...patch } as ActionSpec) : a)) })),
+    editMarks: (stepId, fn, history = true) => editStep(stepId, (st) => {
+      if (st.motion.type !== "follow") return st;
+      const r = fn(st.motion.path.marks ?? [], st.actions);
+      return { ...st, motion: { ...st.motion, path: { ...st.motion.path, marks: r.marks } }, actions: r.actions };
+    }, history),
     removeAction: (stepId, actionId) => editStep(stepId, (st) => ({ ...st, actions: st.actions.filter((a) => a.id !== actionId) })),
     allRoutines: () => syncedRoutines(get()),
     switchRoutine: (i) => {

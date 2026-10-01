@@ -1,7 +1,8 @@
-import { defaultMotion, uid, type ActionSpec, type ActionType, type MotionSpec, type Step, type Trigger } from "../core/routine";
+import { defaultMotion, uid, type ActionSpec, type ActionType, type PathMark, type PathSpec, type MotionSpec, type Step, type Trigger } from "../core/routine";
 import { planPoses } from "../core/common-plan";
 import { describeMotion } from "../codegen/common";
 import { pathLength } from "../core/path";
+import { addMark, addMarkAction, moveMark, patchMark, removeMark } from "../core/marks";
 import { Check, Num, Sel, Section } from "./atoms";
 import { PlanPanel } from "./PlanPanel";
 import { useState } from "react";
@@ -205,6 +206,7 @@ function MotionEditor({ step, before }: { step: Step; before: { x: number; y: nu
         <Num label="Decel rate" value={m.path.decel} onChange={(v) => up({ path: { ...m.path, decel: v } })} step={100} min={100} hint="How hard the speed profile brakes toward the end." />
         {timeout(m)}
         <p className="note">Length {fmt(len)} in, {m.path.segments.length} segment(s). Drag the control points on the field.</p>
+        <PathPoints step={step} path={m.path} len={len} />
         <div className="btns">
           <button onClick={() => {
             const last = m.path.segments.at(-1)!.p[3];
@@ -221,6 +223,38 @@ function MotionEditor({ step, before }: { step: Step; before: { x: number; y: nu
     case "wait":
       return <Num label="Duration" value={m.ms} onChange={(v) => up({ ms: v })} step={50} min={0} unit="ms" />;
   }
+}
+
+const MARK_ACTIONS: { label: string; type: ActionType; arg?: string }[] = [
+  { label: "Intake on", type: "intakeIn" }, { label: "Intake off", type: "intakeStop" }, { label: "Rear intake on", type: "rearIntakeIn" }, { label: "Rear intake off", type: "rearIntakeStop" },
+  { label: "Clamp", type: "clamp" }, { label: "Release", type: "unclamp" }, { label: "Place", type: "place" },
+];
+
+/** Points pinned on a curve: where something significant happens (slow down, run the intake, score). */
+function PathPoints({ step, path, len }: { step: Step; path: PathSpec; len: number }) {
+  const st = useEditor();
+  const marks = path.marks ?? [];
+  const edit = (f: (s: { marks: PathMark[]; actions: ActionSpec[] }) => { marks: PathMark[]; actions: ActionSpec[] }) => st.editMarks(step.id, (marks, actions) => f({ marks, actions }));
+  return (
+    <div className="actions">
+      <h4>Points on this curve ({marks.length})</h4>
+      <p className="note">Pin a point where something matters - slow down for a tight turn, switch the intake on, score. Or click the selected curve with the Select tool.</p>
+      {marks.map((mk, i) => {
+        const linked = step.actions.filter((a) => a.markId === mk.id);
+        return (
+          <div className="card" key={mk.id}>
+            <div className="row two"><b>Point {i + 1}</b><button onClick={() => edit((s) => removeMark(s, mk.id))}>✕</button></div>
+            <Num label="Distance along" value={mk.d} onChange={(v) => edit((s) => moveMark(s, mk.id, Math.min(len, v)))} step={1} min={0} max={Math.round(len)} unit="in" />
+            <Num label="Speed there" value={mk.speed ?? path.maxSpeed} onChange={(v) => edit((s) => patchMark(s, mk.id, { speed: v }))} min={5} max={127} hint="The robot brakes into this point to be at this speed (0-127)." />
+            {mk.speed !== undefined && <button onClick={() => edit((s) => patchMark(s, mk.id, { speed: undefined }))}>Don't limit speed</button>}
+            {linked.length > 0 && <ul className="done">{linked.map((a) => <li key={a.id}>{ACTION_LABEL[a.type]}<button className="x" onClick={() => st.removeAction(step.id, a.id)}>✕</button></li>)}</ul>}
+            <div className="chips">{MARK_ACTIONS.map((a) => <button key={a.label} onClick={() => edit((s) => addMarkAction(s, mk.id, a.type, a.arg))}>+ {a.label}</button>)}</div>
+          </div>
+        );
+      })}
+      <button onClick={() => edit((s) => addMark(s, len / 2))}>+ Point on curve</button>
+    </div>
+  );
 }
 
 /** The ending face of a curve is the turn step right after it; this edits (or creates) it. */

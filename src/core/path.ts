@@ -70,6 +70,12 @@ export function buildPathPoints(path: PathSpec, trackWidth = 12): PathPoint[] {
     const s = path.maxSpeed / (1 + Math.abs(k[i]) * trackWidth * 0.5);
     return Math.max(path.minSpeed, Math.min(path.maxSpeed, s));
   });
+  // pinned points can cap the speed where they sit (the backward pass below brakes into them)
+  if (path.marks?.length) {
+    const along: number[] = [0];
+    for (let i = 1; i < pts.length; i++) along.push(along[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y));
+    for (const m of path.marks) if (m.speed !== undefined) for (let i = 0; i < pts.length; i++) if (Math.abs(along[i] - m.d) <= Math.max(1.5, path.spacing)) speeds[i] = Math.min(speeds[i], Math.max(1, m.speed));
+  }
   speeds[speeds.length - 1] = 0;
   for (let i = speeds.length - 2; i >= 0; i--) {
     const d = Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
@@ -104,4 +110,34 @@ export function toLemLibPathFile(path: PathSpec, trackWidth = 12): string {
 
 export function pathLength(path: PathSpec): number {
   return path.segments.reduce((a, s) => a + bezierLength(s.p), 0);
+}
+
+/** The point `d` inches along the curve, and the heading (deg, 0 = +y, clockwise) of travel there. */
+export function pointAtDistance(path: PathSpec, d: number): { x: number; y: number; heading: number } {
+  const pts = samplePath(path);
+  let acc = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const seg = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    if (acc + seg >= d || i === pts.length - 1) {
+      const f = seg > 0 ? Math.max(0, Math.min(1, (d - acc) / seg)) : 0;
+      return { x: pts[i - 1].x + (pts[i].x - pts[i - 1].x) * f, y: pts[i - 1].y + (pts[i].y - pts[i - 1].y) * f, heading: (Math.atan2(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y) * 180) / Math.PI };
+    }
+    acc += seg;
+  }
+  return { x: pts[0]?.x ?? 0, y: pts[0]?.y ?? 0, heading: 0 };
+}
+
+/** Distance along the curve of the point closest to (x, y), and how far (x, y) is from the curve. */
+export function distanceAlongPath(path: PathSpec, x: number, y: number): { d: number; off: number } {
+  const pts = samplePath(path);
+  let acc = 0, best = { d: 0, off: Infinity };
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i];
+    const seg = Math.hypot(b.x - a.x, b.y - a.y);
+    const f = seg > 0 ? Math.max(0, Math.min(1, ((x - a.x) * (b.x - a.x) + (y - a.y) * (b.y - a.y)) / (seg * seg))) : 0;
+    const off = Math.hypot(a.x + (b.x - a.x) * f - x, a.y + (b.y - a.y) * f - y);
+    if (off < best.off) best = { d: acc + seg * f, off };
+    acc += seg;
+  }
+  return best;
 }

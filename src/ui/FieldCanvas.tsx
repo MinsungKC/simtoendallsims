@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fitStroke } from "../core/fit";
+import { addMark, moveMark } from "../core/marks";
 import { avoidObstacles, polylineFromStroke } from "../core/autoroute";
 import { avoidList, robotRadius } from "../core/repair";
 import { forwardOf, rightOf } from "../core/geometry";
 import { planPoses } from "../core/common-plan";
-import { pathLength, samplePath } from "../core/path";
+import { distanceAlongPath, pathLength, pointAtDistance, samplePath } from "../core/path";
 import type { PathSpec } from "../core/routine";
 import { defaultMotion } from "../core/routine";
 import { obstaclePoly } from "../core/world";
@@ -16,10 +17,11 @@ import { useStore } from "./store";
 import { worldInit, type CustomField } from "../games/types";
 
 interface Handle {
-  kind: "start" | "start-heading" | "step" | "step-heading" | "ctrl" | "object" | "task";
+  kind: "start" | "start-heading" | "step" | "step-heading" | "ctrl" | "object" | "task" | "mark";
   id?: string;
   seg?: number;
   idx?: number;
+  mark?: string;
   x: number;
   y: number;
   r: number;
@@ -182,6 +184,14 @@ export function FieldCanvas() {
           seg.p.forEach((q, qi) => { if (si > 0 && qi === 0) return; handles.current.push({ kind: "ctrl", id: s.id, seg: si, idx: qi, x: q.x, y: q.y, r: HANDLE_R }); });
         });
       }
+      const marks = path.marks ?? [];
+      marks.forEach((mk) => {
+        const q = pointAtDistance(path, mk.d);
+        ctx.save(); ctx.translate(px(q.x), py(q.y)); ctx.rotate(Math.PI / 4);
+        ctx.fillStyle = mk.speed !== undefined ? "#e0603a" : "#2f9e6f"; ctx.strokeStyle = "#101418"; ctx.lineWidth = 1.5;
+        ctx.fillRect(-5, -5, 10, 10); ctx.strokeRect(-5, -5, 10, 10); ctx.restore();
+        if (s.id === selected) handles.current.push({ kind: "mark", id: s.id, seg: marks.indexOf(mk), x: q.x, y: q.y, r: 9, mark: mk.id });
+      });
       void i;
     });
 
@@ -345,7 +355,18 @@ export function FieldCanvas() {
       if (h.id && (h.kind === "step" || h.kind === "step-heading" || h.kind === "ctrl")) st.select(h.id);
       return;
     }
-    if (st.tool === "select" || st.tool === "objects") { st.select(null); return; }
+    if (st.tool === "select") {
+      // clicking a curve selects it; clicking the selected curve again pins a point there
+      let near: { id: string; d: number } | null = null;
+      for (const q of st.routine.steps) if (q.motion.type === "follow") { const r = distanceAlongPath(q.motion.path, p.x, p.y); if (r.off * p.S < 10 && (!near || r.off < near.d)) near = { id: q.id, d: r.off }; }
+      if (near) {
+        if (st.selected === near.id) { const step = st.routine.steps.find((q) => q.id === near!.id)!; if (step.motion.type === "follow") { const { d } = distanceAlongPath(step.motion.path, p.x, p.y); st.editMarks(near.id, (marks, actions) => addMark({ marks, actions }, d)); } }
+        else st.select(near.id);
+        return;
+      }
+      st.select(null); return;
+    }
+    if (st.tool === "objects") { st.select(null); return; }
     if (st.tool === "draw") { stroke.current = [{ x: p.x, y: p.y }]; return; }
     if (st.tool === "targets") {
       const g = st.game();
@@ -402,6 +423,12 @@ export function FieldCanvas() {
       const step = st.routine.steps[idx];
       const origin = step.motion.type === "moveToPose" ? { x: step.motion.x, y: step.motion.y } : planPoses(st.routine, st.robot).before[idx];
       st.updateMotion(h.id, { heading: Math.round(bearingDeg(origin, { x, y })) } as never, { history: false });
+    } else if (h.kind === "mark" && h.id && h.mark) {
+      const step = st.routine.steps.find((q) => q.id === h.id);
+      if (!step || step.motion.type !== "follow") return;
+      const { d } = distanceAlongPath(step.motion.path, p.x, p.y);
+      st.editMarks(h.id, (marks, actions) => moveMark({ marks, actions }, h.mark!, d), false);
+      return;
     } else if (h.kind === "ctrl" && h.id !== undefined && h.seg !== undefined && h.idx !== undefined) {
       const step = st.routine.steps.find((s) => s.id === h.id);
       if (!step || step.motion.type !== "follow") return;
@@ -428,7 +455,6 @@ export function FieldCanvas() {
     const st = useStore.getState();
     const last = planPoses(st.routine, st.robot).after.at(-1) ?? { ...st.routine.start };
     const g = st.game();
-    const obstacles = avoidList(st.customField ? st.customField.obstacles : g.obstacles, st.customField ? st.customField.objects : g.objects, st.avoid, st.routine, st.robot);
     if (st.simple) {
       // simple mode: straight legs only
       const legs = polylineFromStroke(ink, { obstacles: [], fieldSize, clearance: 0, from: { x: last.x, y: last.y } }, 5, 10);
@@ -438,7 +464,9 @@ export function FieldCanvas() {
       return;
     }
     // one smooth curve (obstacle-avoided, tangent-continuous), then a turn that sets the ending face
-    const safe = avoidObstacles([{ x: last.x, y: last.y }, ...ink], { obstacles, fieldSize, clearance: robotRadius(st.robot) + st.avoid.margin });
+    // loose pieces are left alone here (the curve is what you drew; they get bumped or picked up) - only Goals, Loaders and walls bend it
+    const hard = avoidList(st.customField ? st.customField.obstacles : g.obstacles, [], st.avoid, st.routine, st.robot);
+    const safe = avoidObstacles([{ x: last.x, y: last.y }, ...ink], { obstacles: hard, fieldSize, clearance: robotRadius(st.robot) + st.avoid.margin });
     const segments = fitStroke(safe);
     if (!segments.length) return;
     const m = defaultMotion("follow", { x: last.x, y: last.y, heading: last.heading });
@@ -446,12 +474,8 @@ export function FieldCanvas() {
     m.forwards = !st.drawReverse;
     m.path.segments = segments.map((sg) => ({ p: sg.p.map((q) => ({ x: Math.round(q.x * 100) / 100, y: Math.round(q.y * 100) / 100 })) as typeof sg.p }));
     m.timeout = Math.max(2000, Math.ceil(((pathLength(m.path) / 35) * 1000 + 1000) / 100) * 100);
-    const end = m.path.segments.at(-1)!.p;
-    const tangent = bearingDeg(end[2].x === end[3].x && end[2].y === end[3].y ? end[1] : end[2], end[3]);
-    const face = Math.round(tangent + (st.drawReverse ? 180 : 0));
-    const turn = defaultMotion("turnToHeading", { x: end[3].x, y: end[3].y, heading: ((face + 540) % 360) - 180 });
-    st.addSteps([m, turn]);
-    st.fixPath();
+    // one step ending at the drawn point (the robot finishes pointing along the curve); pin points on the curve to tune it
+    st.addSteps([m]);
   };
 
   return (
