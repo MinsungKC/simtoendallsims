@@ -1,3 +1,5 @@
+Testing out my free 100 dollars of claude :)
+
 # SimToEndAllSims
 
 A physics-based VEX V5RC autonomous simulator and code generator that runs entirely in the browser.
